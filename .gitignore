@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local media and generated analysis artifacts
+tracks/
+analysis_videos/
+output/
+
+# OS/editor files
+.DS_Store
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp

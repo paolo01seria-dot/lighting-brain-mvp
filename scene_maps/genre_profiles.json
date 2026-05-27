@@ -1,0 +1,127 @@
+{
+  "metal": {
+    "energy_bias": "aggressive",
+    "scene_language": [
+      "white_strobe_hits",
+      "red_backlight",
+      "sharp_blackouts",
+      "fast_chase",
+      "breakdown_pulse"
+    ],
+    "segment_scenes": {
+      "start": "blackout_ready",
+      "intro": "metal_intro_red_haze",
+      "verse": "metal_verse_tight_pulse",
+      "chorus": "metal_chorus_white_strobe",
+      "bridge": "metal_breakdown_deep_red",
+      "outro": "metal_outro_blackout_hits",
+      "end": "blackout_end"
+    },
+    "sample_category_scene_pools": {
+      "steady_bass_pulse": ["metal_pulse_red_hits", "metal_cross_white_hits"],
+      "high_energy_drop": ["metal_drop_white_strobe", "metal_drop_red_white_blast"],
+      "breakdown": ["metal_breakdown_deep_red", "metal_breakdown_single_white_hits"],
+      "chaotic_dense_section": ["metal_dense_fast_hits", "metal_dense_blackout_stabs"]
+    }
+  },
+  "house": {
+    "energy_bias": "groove",
+    "scene_language": [
+      "warm_wash",
+      "smooth_color_cycle",
+      "four_on_floor_pulse",
+      "chorus_lift",
+      "soft_blinder_moments"
+    ],
+    "segment_scenes": {
+      "start": "blackout_ready",
+      "intro": "house_intro_warm_wash",
+      "verse": "house_groove_cyan_pulse",
+      "chorus": "house_hook_color_lift",
+      "bridge": "house_break_filter_build",
+      "outro": "house_outro_warm_fade",
+      "end": "blackout_end"
+    },
+    "sample_category_scene_pools": {
+      "steady_bass_pulse": ["house_four_on_floor_pulse", "house_side_chase_warm"],
+      "high_energy_drop": ["house_hook_color_lift", "house_drop_soft_blinders"],
+      "breakdown": ["house_break_filter_build", "house_break_blue_hold"],
+      "ambient_no_beat": ["house_intro_warm_wash", "house_ambient_low_amber"]
+    }
+  },
+  "techno": {
+    "energy_bias": "hypnotic",
+    "scene_language": [
+      "minimal_pulse",
+      "cold_white",
+      "deep_blue",
+      "industrial_strobe",
+      "long_builds"
+    ],
+    "segment_scenes": {
+      "start": "blackout_ready",
+      "intro": "techno_intro_low_blue",
+      "verse": "techno_hypnotic_grid",
+      "chorus": "techno_peak_white_drive",
+      "bridge": "techno_breakdown_dark_hold",
+      "outro": "techno_outro_low_blue",
+      "end": "blackout_end"
+    },
+    "sample_category_scene_pools": {
+      "steady_bass_pulse": ["techno_hypnotic_grid", "techno_single_line_chase"],
+      "high_energy_drop": ["techno_peak_white_drive", "techno_peak_cold_strobe"],
+      "breakdown": ["techno_breakdown_dark_hold", "techno_breakdown_blue_scan"],
+      "chaotic_dense_section": ["techno_dense_industrial_hits", "techno_dense_white_cuts"]
+    }
+  },
+  "electronic": {
+    "energy_bias": "wide",
+    "scene_language": [
+      "neon_color",
+      "wide_movement",
+      "drop_flash",
+      "ambient_break",
+      "build_riser"
+    ],
+    "segment_scenes": {
+      "start": "blackout_ready",
+      "intro": "electronic_intro_neon_slow",
+      "verse": "electronic_body_motion",
+      "chorus": "electronic_drop_bright",
+      "bridge": "electronic_break_ambient",
+      "outro": "electronic_outro_neon_fade",
+      "end": "blackout_end"
+    },
+    "sample_category_scene_pools": {
+      "steady_bass_pulse": ["electronic_body_motion", "electronic_neon_chase"],
+      "high_energy_drop": ["electronic_drop_bright", "electronic_drop_flash_sweep"],
+      "breakdown": ["electronic_break_ambient", "electronic_break_single_color"],
+      "buildup": ["electronic_build_riser", "electronic_build_color_stack"]
+    }
+  },
+  "garage": {
+    "energy_bias": "swing",
+    "scene_language": [
+      "syncopated_pulse",
+      "warm_cool_switch",
+      "bass_hits",
+      "vocal_space",
+      "quick_color_answers"
+    ],
+    "segment_scenes": {
+      "start": "blackout_ready",
+      "intro": "garage_intro_warm_cool",
+      "verse": "garage_swing_pulse",
+      "chorus": "garage_hook_bass_hits",
+      "bridge": "garage_break_vocal_space",
+      "outro": "garage_outro_snap_fade",
+      "end": "blackout_end"
+    },
+    "sample_category_scene_pools": {
+      "steady_bass_pulse": ["garage_swing_pulse", "garage_syncopated_chase"],
+      "high_energy_drop": ["garage_hook_bass_hits", "garage_hook_color_answers"],
+      "breakdown": ["garage_break_vocal_space", "garage_break_warm_hold"],
+      "transition": ["garage_snap_transition", "garage_quick_color_answer"]
+    }
+  }
+}

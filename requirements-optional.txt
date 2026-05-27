@@ -1,0 +1,6 @@
+# Optional audio-analysis stack.
+#
+# Install only when we are ready to run real audio feature extraction locally.
+librosa
+aubio
+sounddevice

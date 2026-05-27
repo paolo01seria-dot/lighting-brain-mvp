@@ -1,0 +1,30 @@
+{
+  "name": "basic_house_party",
+  "default_scene": "groove_neutral",
+  "segment_scenes": {
+    "start": "blackout_ready",
+    "intro": "intro_soft_blue",
+    "verse": "verse_pulse_cyan",
+    "chorus": "chorus_energy_red",
+    "bridge": "bridge_build_white",
+    "outro": "outro_warm_fade",
+    "end": "blackout_end"
+  },
+  "bpm_rules": [
+    {
+      "min_bpm": 0,
+      "max_bpm": 95,
+      "energy": "low"
+    },
+    {
+      "min_bpm": 96,
+      "max_bpm": 128,
+      "energy": "medium"
+    },
+    {
+      "min_bpm": 129,
+      "max_bpm": 999,
+      "energy": "high"
+    }
+  ]
+}

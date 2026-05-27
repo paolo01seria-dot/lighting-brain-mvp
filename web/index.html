@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lighting Brain</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar" aria-label="Controls">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <h1>Lighting Brain</h1>
+            <p id="trackLabel">No track loaded</p>
+          </div>
+        </div>
+
+        <div class="controls">
+          <label class="file-control">
+            <span>Load audio</span>
+            <input id="audioFile" type="file" accept="audio/*">
+          </label>
+
+          <label>
+            <span>Output</span>
+            <select id="outputTarget">
+              <option value="tester">Mini tester</option>
+              <option value="qlcplus_osc">QLC+ OSC</option>
+              <option value="qlcplus_midi">QLC+ MIDI</option>
+              <option value="freestyler_midi">FreeStyler MIDI</option>
+              <option value="artnet_intent">Art-Net intent</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Genre</span>
+            <select id="genreProfile">
+              <option value="house">House</option>
+              <option value="techno">Techno</option>
+              <option value="metal">Metal</option>
+              <option value="electronic">Electronic</option>
+              <option value="garage">Garage</option>
+            </select>
+          </label>
+
+          <label class="number-control">
+            <span>Lights</span>
+            <input id="lightCount" type="number" min="1" max="32" value="8">
+          </label>
+
+          <label class="range-control">
+            <span>Differenziazione <strong id="differentiationValue">2</strong></span>
+            <input id="differentiation" type="range" min="1" max="8" value="2">
+          </label>
+
+          <div class="transport">
+            <button id="playButton" type="button" disabled>Play</button>
+            <button id="stopButton" type="button" disabled>Stop</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="tester-layout">
+        <aside class="meter-panel" aria-label="Signal meters">
+          <div class="status-row">
+            <span>State</span>
+            <strong id="stateLabel">Idle</strong>
+          </div>
+          <div class="status-row">
+            <span>Output</span>
+            <strong id="outputLabel">Mini tester</strong>
+          </div>
+          <div class="status-row">
+            <span>Energy</span>
+            <strong id="energyLabel">0%</strong>
+          </div>
+          <div class="meter">
+            <div id="energyFill"></div>
+          </div>
+          <div class="event-log" id="eventLog" aria-live="polite"></div>
+        </aside>
+
+        <section class="stage-panel" aria-label="Mini light tester">
+          <div class="stage-toolbar">
+            <div>
+              <h2>Mini Light Tester</h2>
+              <p>Drag lights to sketch a real setup</p>
+            </div>
+            <button id="resetLayoutButton" type="button">Reset layout</button>
+          </div>
+
+          <div id="stage" class="stage">
+            <div class="stage-depth depth-back"></div>
+            <div class="stage-depth depth-mid"></div>
+            <div class="stage-depth depth-front"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

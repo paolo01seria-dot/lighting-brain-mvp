@@ -1,0 +1,49 @@
+{
+  "path": "tracks/example_song.mp3",
+  "bpm": 124,
+  "beats": [0.48, 0.96, 1.45, 1.93, 2.42],
+  "downbeats": [0.48, 2.42],
+  "beat_positions": [1, 2, 3, 4, 1],
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 8.0,
+      "label": "start"
+    },
+    {
+      "start": 8.0,
+      "end": 32.0,
+      "label": "intro"
+    },
+    {
+      "start": 32.0,
+      "end": 64.0,
+      "label": "verse"
+    },
+    {
+      "start": 64.0,
+      "end": 96.0,
+      "label": "chorus"
+    },
+    {
+      "start": 96.0,
+      "end": 112.0,
+      "label": "bridge"
+    },
+    {
+      "start": 112.0,
+      "end": 144.0,
+      "label": "chorus"
+    },
+    {
+      "start": 144.0,
+      "end": 152.0,
+      "label": "outro"
+    },
+    {
+      "start": 152.0,
+      "end": 153.0,
+      "label": "end"
+    }
+  ]
+}

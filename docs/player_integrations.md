@@ -47,6 +47,22 @@ Approccio consigliato:
 Non assumiamo che Rekordbox offra sempre un'API pulita e universale. L'app deve
 funzionare anche quando riceve solo audio.
 
+## Roadmap input audio
+
+Ordine consigliato:
+
+1. File audio locale, gia' presente nella UI demo.
+2. Audio live del Mac, usando `sounddevice` come primo MVP.
+3. Audio di sistema del Mac tramite dispositivo virtuale/loopback quando serve
+   leggere qualunque player senza integrazione dedicata.
+4. Rekordbox come player DJ prioritario: prima via file/export/metadata, poi
+   sincronizzazione live se troviamo un canale stabile.
+5. Spotify, Apple Music, Tidal e altri player consumer piu' avanti, trattandoli
+   prima come sorgenti audio generiche e solo dopo come integrazioni specifiche.
+
+Principio: prima catturiamo l'audio in modo affidabile dal Mac, poi aggiungiamo
+adapter specifici per i player.
+
 ## Altri player da considerare
 
 - Serato DJ

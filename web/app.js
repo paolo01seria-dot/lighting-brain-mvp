@@ -69,7 +69,6 @@ function buildLights(count, keepPositions = true) {
     light.type = "button";
     light.className = "light";
     light.dataset.index = String(index);
-    light.dataset.label = String(index + 1);
     light.style.left = `${position.x}%`;
     light.style.top = `${position.y}%`;
     light.addEventListener("pointerdown", startDrag);
@@ -355,11 +354,11 @@ function renderLights() {
 
     light.style.background = visible
       ? `rgba(${r}, ${g}, ${b}, ${0.22 + intensity * 0.78})`
-      : "rgba(255, 255, 255, 0.018)";
-    light.style.opacity = visible ? (0.1 + intensity * 0.9).toFixed(3) : "0.08";
+      : "";
+    light.style.opacity = visible ? (0.1 + intensity * 0.9).toFixed(3) : "0.62";
     light.style.boxShadow = visible
       ? `0 0 ${Math.round(10 + intensity * 54)}px rgba(${r}, ${g}, ${b}, ${intensity * 0.84})`
-      : "0 0 0 rgba(255, 255, 255, 0)";
+      : "";
     light.style.setProperty("--beam", visible ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
     light.style.setProperty("--beam-opacity", visible ? String(intensity * 0.42) : "0");
     light.classList.toggle("active", intensity > 0.62);

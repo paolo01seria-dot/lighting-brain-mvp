@@ -9,6 +9,9 @@ __pycache__/
 .venv/
 venv/
 
+# Local Git recovery backup
+.git-backup-broken/
+
 # Local media and generated analysis artifacts
 tracks/
 analysis_videos/

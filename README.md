@@ -81,7 +81,7 @@ la prova rapida.
 Quando vuoi provare la prima analisi audio reale:
 
 ```shell
-uv pip install -e ".[audio]"
+uv pip install ".[audio]"
 lighting-audio-analyze \
   "tracks/brano-test.mp3" \
   --out analysis/brano-test.librosa.json

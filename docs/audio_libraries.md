@@ -80,8 +80,13 @@ audio file
 Il comando dedicato e':
 
 ```shell
+uv pip install ".[audio]"
 lighting-audio-analyze tracks/brano.mp3 --out analysis/brano.librosa.json
 ```
+
+Nota installazione: per l'extra `audio` usiamo installazione non-editable
+(`uv pip install ".[audio]"`). L'editable install (`-e`) puo' creare problemi
+con il path locale se la cartella contiene spazi.
 
 `librosa` e' usato per BPM, beat, onset, RMS, centroid e prima segmentazione.
 `sounddevice` e' incluso nell'extra `audio` per prepararci agli input live.

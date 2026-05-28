@@ -70,13 +70,18 @@ This must be deterministic and musically intentional, not random.
 
 ## Priority logic
 
-1. BPM / beat / bass pulse controls timing.
+1. BPM / beat / repeated musical pulse controls timing.
 2. Special transitions can temporarily override normal behavior.
 3. Sample-category controls visual language.
 4. Ambient fallback handles unclear/no-BPM sections.
 
 Loudness spikes alone must not be treated as rhythmic structure.
 
-If BPM, beat or bass pulse is reliable, something must visibly evolve even when
-the selected scene does not change. The evolution can be dimmer pulses, chase
-progression, movement, strobe modulation or color step progression.
+If BPM, beat or any reliable repeated pulse is detected, something must visibly
+evolve even when the selected scene does not change. The pulse may come from
+bass, drums, guitar arpeggio, synth pattern, hi-hat or another predictable
+repeated instrument. The evolution can be dimmer pulses, chase progression,
+movement, strobe modulation or color step progression.
+
+The system must not assume BPM only comes from bass. In sparse intros, a stable
+mid/high arpeggio can be the primary musical clock until the bass enters.

@@ -43,7 +43,15 @@ let animationFrame;
 let smoothedEnergy = 0;
 let previousEnergy = 0;
 let previousLow = 0;
+let previousMid = 0;
+let previousHigh = 0;
 let previousRms = 0;
+let musicalClock = {
+  lastPulseTime: null,
+  interval: null,
+  confidence: 0,
+  source: "none",
+};
 let frameCounter = 0;
 let lastEventSecond = -1;
 let categoryCounters = {};
@@ -165,7 +173,15 @@ function stopPlayback() {
   smoothedEnergy = 0;
   previousEnergy = 0;
   previousLow = 0;
+  previousMid = 0;
+  previousHigh = 0;
   previousRms = 0;
+  musicalClock = {
+    lastPulseTime: null,
+    interval: null,
+    confidence: 0,
+    source: "none",
+  };
   frameCounter = 0;
   lastEventSecond = -1;
   categoryCounters = {};
@@ -204,9 +220,23 @@ function updateLights(frequencyData, energy, rms, profile) {
   const dominantBand = indexOfMax(bands);
   const energyDelta = energy - previousEnergy;
   const lowDelta = low - previousLow;
+  const midDelta = mid - previousMid;
+  const highDelta = high - previousHigh;
   const rmsDelta = rms - previousRms;
-  const onsetStrength = Math.max(0, energyDelta * 1.35 + lowDelta * 1.05 + rmsDelta * 2.2 + high * 0.08);
-  const isOnset = onsetStrength > profile.threshold;
+  const lowOnset = Math.max(0, lowDelta * 1.15 + rmsDelta * 1.35);
+  const tonalOnset = Math.max(0, midDelta * 1.35 + highDelta * 1.05 + energyDelta * 0.7);
+  const onsetStrength = Math.max(0, energyDelta * 1.05 + lowOnset + tonalOnset + high * 0.04);
+  updateMusicalClock({
+    time,
+    lowOnset,
+    tonalOnset,
+    energy,
+    low,
+    mid,
+    high,
+  });
+  const clockPulse = shouldTriggerClockPulse(time);
+  const isOnset = onsetStrength > profile.threshold || clockPulse;
   const isStrongHit = onsetStrength > profile.threshold * 2.1 || rmsDelta > 0.085;
 
   decayLightStates(profile.decay);
@@ -221,6 +251,7 @@ function updateLights(frequencyData, energy, rms, profile) {
       high,
       dominantBand,
       strong: isStrongHit,
+      clockSource: musicalClock.source,
     });
   } else if (shouldHoldSparseChase(time, profile, energy)) {
     triggerPattern({
@@ -233,14 +264,69 @@ function updateLights(frequencyData, energy, rms, profile) {
       dominantBand,
       strong: false,
       sparse: true,
+      clockSource: musicalClock.source,
     });
   }
 
   renderLights();
   previousEnergy = energy;
   previousLow = low;
+  previousMid = mid;
+  previousHigh = high;
   previousRms = rms;
   frameCounter += 1;
+}
+
+function updateMusicalClock(reading) {
+  const candidates = [
+    { source: "bass", strength: reading.lowOnset, minEnergy: reading.low },
+    { source: "mid_arpeggio", strength: reading.tonalOnset, minEnergy: reading.mid },
+    { source: "high_pattern", strength: reading.tonalOnset * 0.82, minEnergy: reading.high },
+  ];
+  const candidate = candidates
+    .filter((item) => item.strength > 0.075 && item.minEnergy > 0.12)
+    .sort((a, b) => b.strength - a.strength)[0];
+
+  if (!candidate) {
+    musicalClock.confidence *= 0.992;
+    return;
+  }
+
+  if (musicalClock.lastPulseTime === null) {
+    musicalClock.lastPulseTime = reading.time;
+    musicalClock.source = candidate.source;
+    musicalClock.confidence = Math.max(musicalClock.confidence, 0.18);
+    return;
+  }
+
+  const interval = reading.time - musicalClock.lastPulseTime;
+  if (interval < 0.24) return;
+  if (interval > 1.25) {
+    musicalClock.lastPulseTime = reading.time;
+    musicalClock.confidence *= 0.72;
+    return;
+  }
+
+  const previousInterval = musicalClock.interval ?? interval;
+  const stable = Math.abs(interval - previousInterval) < 0.16;
+  musicalClock.interval = previousInterval * 0.68 + interval * 0.32;
+  musicalClock.lastPulseTime = reading.time;
+  musicalClock.source = candidate.source;
+  musicalClock.confidence = clamp(
+    musicalClock.confidence + (stable ? 0.18 : 0.06) + candidate.strength * 0.15,
+    0,
+    1
+  );
+}
+
+function shouldTriggerClockPulse(time) {
+  if (!musicalClock.interval || musicalClock.confidence < 0.34) return false;
+  const elapsed = time - musicalClock.lastPulseTime;
+  if (elapsed < musicalClock.interval * 0.92) return false;
+  if (elapsed > musicalClock.interval * 1.35) return false;
+  musicalClock.lastPulseTime = time;
+  musicalClock.confidence *= 0.985;
+  return true;
 }
 
 function decayLightStates(decay) {
@@ -267,7 +353,8 @@ function triggerPattern(context) {
   const activeIndexes = pickActiveLights(context.profile, context.time, count, context.strong, context.sparse);
   activeIndexes.forEach((index, order) => {
     const colorIndex = pickColorIndex(context, index, order);
-    const base = context.strong ? 1 : context.sparse ? 0.42 : 0.72;
+    const clockBoost = context.clockSource && context.clockSource !== "none" ? 0.08 : 0;
+    const base = context.strong ? 1 : context.sparse ? 0.42 : 0.72 + clockBoost;
     const spectral = context.low * 0.2 + context.mid * 0.14 + context.high * 0.18;
     lightStates[index].intensity = clamp(base + spectral - order * 0.06, 0.28, 1);
     lightStates[index].age = 0;
@@ -382,7 +469,7 @@ function maybeLogSignal(energy) {
   const category = categoryForEnergy(energy);
   const sceneChanged = updateCategoryScene(category);
   const intent = category === "high_energy_drop" ? "peak_energy" : category === "steady_bass_pulse" ? "main_groove" : "low_energy";
-  logEvent(`${formatTime(currentSecond)} ${output} ${genre} ${category}${sceneChanged ? " scene-change" : ""}`);
+  logEvent(`${formatTime(currentSecond)} ${output} ${genre} ${category} clock:${musicalClock.source}${sceneChanged ? " scene-change" : ""}`);
 }
 
 function categoryForEnergy(energy) {

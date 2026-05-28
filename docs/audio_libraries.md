@@ -61,6 +61,28 @@ Quando usarla:
 3. Generare timeline luci piu' ricche.
 4. Solo dopo: `sounddevice` + `aubio` per realtime.
 
+## Stato implementazione
+
+Primo modulo aggiunto:
+
+```text
+audio file
+-> lighting_brain.audio_analysis.analyze_audio_file()
+-> analysis JSON compatibile con lighting-brain
+-> timeline / output adapter
+```
+
+Il comando dedicato e':
+
+```shell
+lighting-audio-analyze tracks/brano.mp3 --out analysis/brano.librosa.json
+```
+
+`librosa` e' usato per BPM, beat, onset, RMS, centroid e prima segmentazione.
+`sounddevice` e `aubio` sono predisposti come dipendenze opzionali per la fase
+realtime/app desktop, ma non vengono importati nel percorso base per non
+appesantire installazione e test.
+
 ## Principio
 
 Prima facciamo show luci sensati su una traccia gia' analizzata. Poi li rendiamo

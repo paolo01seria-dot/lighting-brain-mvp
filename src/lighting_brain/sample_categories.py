@@ -10,6 +10,9 @@ SEGMENT_CATEGORY_MAP = {
 
 
 def classify_sample_category(segment, bpm=None, energy=None):
+  if segment.get("sample_category"):
+    return segment["sample_category"]
+
   label = segment.get("label", "unknown")
   duration = segment.get("end", 0) - segment.get("start", 0)
 

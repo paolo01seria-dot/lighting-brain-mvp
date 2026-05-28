@@ -8,12 +8,16 @@ dependencies = []
 [project.optional-dependencies]
 audio = [
   "librosa",
+  "numpy",
+  "scipy",
+  "soundfile",
   "aubio",
   "sounddevice",
 ]
 
 [project.scripts]
 lighting-brain = "lighting_brain.cli:main"
+lighting-audio-analyze = "lighting_brain.audio_cli:main"
 
 [build-system]
 requires = ["hatchling"]

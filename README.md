@@ -78,6 +78,18 @@ La strategia e' documentata in `docs/audio_libraries.md`.
 Le dipendenze opzionali sono in `requirements-optional.txt`, ma non servono per
 la prova rapida.
 
+Quando vuoi provare la prima analisi audio reale:
+
+```shell
+uv pip install -e ".[audio]"
+lighting-audio-analyze \
+  "tracks/brano-test.mp3" \
+  --out analysis/brano-test.librosa.json
+```
+
+Quel JSON puo' poi entrare nel comando `lighting-brain` come gli altri file di
+analisi.
+
 ## Direzione prodotto
 
 - Player adapter: vedi `docs/player_integrations.md`.

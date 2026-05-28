@@ -2,5 +2,8 @@
 #
 # Install only when we are ready to run real audio feature extraction locally.
 librosa
+numpy
+scipy
+soundfile
 aubio
 sounddevice

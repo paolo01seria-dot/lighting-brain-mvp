@@ -46,6 +46,7 @@ let sourceNode;
 let mediaStream;
 let mediaSourceNode;
 let audioBuffer;
+let loadedFileName = "";
 let startedAt = 0;
 let pausedAt = 0;
 let animationFrame;
@@ -139,11 +140,25 @@ async function loadAudioFile(file) {
   await ensureAudioContext();
   stopDeviceInput();
   stopPlayback({ resetPosition: true });
-  const data = await file.arrayBuffer();
-  audioBuffer = await audioContext.decodeAudioData(data);
+  let decodedBuffer;
+  try {
+    const data = await file.arrayBuffer();
+    decodedBuffer = await audioContext.decodeAudioData(data);
+  } catch (error) {
+    audioBuffer = null;
+    loadedFileName = "";
+    elements.trackLabel.textContent = "Load failed";
+    elements.playButton.disabled = true;
+    elements.stopButton.disabled = true;
+    elements.seekSlider.disabled = true;
+    updatePlayerTime();
+    throw error;
+  }
+  audioBuffer = decodedBuffer;
+  loadedFileName = file.name;
   overviewCacheCanvas = null;
   pausedAt = 0;
-  elements.trackLabel.textContent = file.name;
+  elements.trackLabel.textContent = loadedFileName;
   elements.playButton.disabled = false;
   elements.stopButton.disabled = false;
   elements.seekSlider.disabled = false;
@@ -893,12 +908,14 @@ function setInputMode(mode) {
   if (fileMode) {
     stopDeviceInput();
     setState(audioBuffer ? "Ready" : "Idle");
+    elements.trackLabel.textContent = loadedFileName || "No track loaded";
     elements.playButton.textContent = "Play";
     elements.playButton.disabled = !audioBuffer;
     elements.stopButton.disabled = !audioBuffer;
   } else {
     stopPlayback({ resetPosition: false, keepLights: true });
     setState("Mic ready");
+    elements.trackLabel.textContent = "Mic Device";
     elements.playButton.textContent = "Listen";
     elements.playButton.disabled = false;
     elements.stopButton.disabled = true;
@@ -954,6 +971,9 @@ async function startDeviceInput() {
   await ensureAudioContext();
   stopPlayback({ resetPosition: false, keepLights: true });
   stopDeviceInput(false);
+  elements.playButton.disabled = true;
+  elements.stopButton.disabled = true;
+  setState("Opening mic");
 
   const selectedDevice = elements.audioDevice.value;
   const constraints = selectedDevice
@@ -966,6 +986,7 @@ async function startDeviceInput() {
   pausedAt = 0;
   isPlaying = true;
   elements.playButton.textContent = "Pause";
+  elements.playButton.disabled = false;
   elements.stopButton.disabled = false;
   elements.trackLabel.textContent = "Mic Device";
   setState("Listening");
@@ -988,7 +1009,9 @@ function stopDeviceInput(resetUi = true) {
     cancelAnimationFrame(animationFrame);
     if (resetUi) {
       setState("Mic ready");
+      elements.trackLabel.textContent = "Mic Device";
       elements.playButton.textContent = "Listen";
+      elements.playButton.disabled = false;
       elements.stopButton.disabled = true;
       updateMeter(0);
       updatePlayerTime();
@@ -1012,6 +1035,11 @@ elements.playButton.addEventListener("click", () => {
   toggleTransport().catch((error) => {
     const micDenied = inputMode === "mic_device" && /permission|denied|notallowed/i.test(error.message);
     setState(micDenied ? "Mic denied" : "Play error");
+    if (inputMode === "mic_device") {
+      elements.playButton.textContent = "Listen";
+      elements.playButton.disabled = false;
+      elements.stopButton.disabled = true;
+    }
     logEvent(micDenied ? "microphone permission denied" : error.message);
   });
 });
@@ -1034,6 +1062,9 @@ elements.audioDevice.addEventListener("change", () => {
     startDeviceInput().catch((error) => {
       const micDenied = /permission|denied|notallowed/i.test(error.message);
       setState(micDenied ? "Mic denied" : "Mic error");
+      elements.playButton.textContent = "Listen";
+      elements.playButton.disabled = false;
+      elements.stopButton.disabled = true;
       logEvent(micDenied ? "microphone permission denied" : error.message);
     });
   }

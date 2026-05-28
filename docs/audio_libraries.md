@@ -39,6 +39,11 @@ Quando usarla:
 - quando vogliamo reagire a un ingresso audio live
 - se QLC+ o un altro sistema deve ricevere eventi mentre la musica suona
 
+Nota macOS: `aubio==0.4.9` puo' fallire in build su Apple Silicon/Python 3.11
+con NumPy recente. Per questo non e' incluso nell'extra `audio` base: lo
+terremo come extra separato e lo affronteremo quando lavoreremo davvero sul
+realtime a bassa latenza.
+
 ## sounddevice
 
 Ruolo: input/output audio dal computer.
@@ -79,9 +84,9 @@ lighting-audio-analyze tracks/brano.mp3 --out analysis/brano.librosa.json
 ```
 
 `librosa` e' usato per BPM, beat, onset, RMS, centroid e prima segmentazione.
-`sounddevice` e `aubio` sono predisposti come dipendenze opzionali per la fase
-realtime/app desktop, ma non vengono importati nel percorso base per non
-appesantire installazione e test.
+`sounddevice` e' incluso nell'extra `audio` per prepararci agli input live.
+`aubio` resta separato per evitare blocchi di installazione: il primo motore
+reale usa `librosa` e funziona offline sui file.
 
 ## Principio
 

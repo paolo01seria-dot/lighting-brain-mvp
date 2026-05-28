@@ -11,8 +11,13 @@ audio = [
   "numpy",
   "scipy",
   "soundfile",
-  "aubio",
   "sounddevice",
+]
+realtime = [
+  "sounddevice",
+]
+aubio = [
+  "aubio",
 ]
 
 [project.scripts]

@@ -5,5 +5,9 @@ librosa
 numpy
 scipy
 soundfile
-aubio
 sounddevice
+
+# aubio is useful for realtime onset/beat work, but it can fail to build on
+# macOS Apple Silicon with recent Python/NumPy. Install separately only when
+# we specifically work on that path.
+# aubio

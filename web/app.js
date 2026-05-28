@@ -151,16 +151,8 @@ async function loadAudioFile(file) {
   audioElement.src = objectUrl;
   audioElement.load();
 
-  const data = await file.arrayBuffer();
-  try {
-    audioBuffer = await audioContext.decodeAudioData(data.slice(0));
-  } catch (error) {
-    audioBuffer = null;
-    logEvent("overview unavailable");
-  }
-
-  await waitForAudioMetadata();
   loadedFileName = file.name;
+  audioBuffer = null;
   overviewCacheCanvas = null;
   pausedAt = 0;
   elements.trackLabel.textContent = loadedFileName;
@@ -171,6 +163,19 @@ async function loadAudioFile(file) {
   updatePlayerTime();
   setState("Ready");
   logEvent(`loaded ${file.name}`);
+
+  file.arrayBuffer().then((data) => {
+    return audioContext.decodeAudioData(data);
+  }).then((decodedBuffer) => {
+    audioBuffer = decodedBuffer;
+    overviewCacheCanvas = null;
+    drawTrackOverview();
+    updatePlayerTime();
+  }).catch(() => {
+    audioBuffer = null;
+    drawTrackOverview();
+    logEvent("overview unavailable");
+  });
 }
 
 function ensureAudioElement() {
@@ -180,35 +185,20 @@ function ensureAudioElement() {
     audioElement.addEventListener("ended", () => {
       stopPlayback({ resetPosition: true });
     });
+    audioElement.addEventListener("loadedmetadata", updatePlayerTime);
+    audioElement.addEventListener("durationchange", updatePlayerTime);
+    audioElement.addEventListener("canplay", () => {
+      if (inputMode === "file" && hasLoadedAudio()) {
+        elements.playButton.disabled = false;
+        elements.stopButton.disabled = false;
+      }
+    });
   }
   if (!mediaElementSource) {
     mediaElementSource = audioContext.createMediaElementSource(audioElement);
     mediaElementSource.connect(analyser);
     mediaElementSource.connect(audioContext.destination);
   }
-}
-
-function waitForAudioMetadata() {
-  if (!audioElement) return Promise.resolve();
-  if (Number.isFinite(audioElement.duration) && audioElement.duration > 0) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      audioElement.removeEventListener("loadedmetadata", onMetadata);
-      audioElement.removeEventListener("error", onError);
-    };
-    const onMetadata = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("Audio file not supported"));
-    };
-    audioElement.addEventListener("loadedmetadata", onMetadata, { once: true });
-    audioElement.addEventListener("error", onError, { once: true });
-  });
 }
 
 async function playAudio() {

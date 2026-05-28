@@ -7,11 +7,11 @@ const colors = [
 ];
 
 const genreProfiles = {
-  house: { smoothing: 0.62, pulse: 1.08, palette: [1, 2, 3, 4], motion: "bounce", chase: 1.0, threshold: 0.12, decay: 0.82, spread: 2 },
-  techno: { smoothing: 0.7, pulse: 1.24, palette: [3, 4, 0], motion: "scan", chase: 1.4, threshold: 0.1, decay: 0.86, spread: 2 },
-  metal: { smoothing: 0.42, pulse: 1.52, palette: [0, 4, 3], motion: "hits", chase: 1.95, threshold: 0.08, decay: 0.74, spread: 3 },
-  electronic: { smoothing: 0.58, pulse: 1.2, palette: [2, 3, 4, 0], motion: "spiral", chase: 1.25, threshold: 0.11, decay: 0.8, spread: 2 },
-  garage: { smoothing: 0.52, pulse: 1.14, palette: [1, 2, 0, 4], motion: "stagger", chase: 1.15, threshold: 0.1, decay: 0.78, spread: 2 },
+  house: { smoothing: 0.48, pulse: 1.28, palette: [1, 2, 3, 4], motion: "bounce", chase: 1.0, threshold: 0.062, decay: 0.78, spread: 2 },
+  techno: { smoothing: 0.54, pulse: 1.34, palette: [3, 4, 0], motion: "scan", chase: 1.4, threshold: 0.058, decay: 0.82, spread: 2 },
+  metal: { smoothing: 0.36, pulse: 1.58, palette: [0, 4, 3], motion: "hits", chase: 1.95, threshold: 0.055, decay: 0.7, spread: 3 },
+  electronic: { smoothing: 0.48, pulse: 1.35, palette: [2, 3, 4, 0], motion: "spiral", chase: 1.25, threshold: 0.06, decay: 0.76, spread: 2 },
+  garage: { smoothing: 0.44, pulse: 1.3, palette: [1, 2, 0, 4], motion: "stagger", chase: 1.15, threshold: 0.058, decay: 0.74, spread: 2 },
 };
 
 const elements = {
@@ -28,6 +28,7 @@ const elements = {
   energyLabel: document.querySelector("#energyLabel"),
   energyFill: document.querySelector("#energyFill"),
   trackOverview: document.querySelector("#trackOverview"),
+  liveSpectrum: document.querySelector("#liveSpectrum"),
   eventLog: document.querySelector("#eventLog"),
   lightCount: document.querySelector("#lightCount"),
   differentiation: document.querySelector("#differentiation"),
@@ -51,6 +52,9 @@ let animationFrame;
 let isPlaying = false;
 let inputMode = "file";
 let overviewCacheCanvas;
+let previousSpectrum;
+let sceneVariant = 0;
+let lastSceneCategory = "ambient_no_beat";
 let smoothedEnergy = 0;
 let previousEnergy = 0;
 let previousLow = 0;
@@ -218,6 +222,9 @@ function stopPlayback(options = {}) {
   previousMid = 0;
   previousHigh = 0;
   previousRms = 0;
+  previousSpectrum = null;
+  sceneVariant = 0;
+  lastSceneCategory = "ambient_no_beat";
   musicalClock = {
     lastPulseTime: null,
     interval: null,
@@ -246,19 +253,23 @@ function animate() {
   const profile = genreProfiles[elements.genreProfile.value];
   analyser.smoothingTimeConstant = profile.smoothing;
 
-  const rawEnergy = average(frequencyData) / 255;
+  const spectralFlux = getSpectralFlux(frequencyData);
+  const inputGain = inputMode === "mic_device" ? 5.8 : 2.75;
+  const rawEnergy = clamp((average(frequencyData) / 255) * inputGain + spectralFlux * 0.72, 0, 1);
   const rms = getRms(timeData);
-  smoothedEnergy = smoothedEnergy * 0.58 + rawEnergy * 0.42;
+  smoothedEnergy = smoothedEnergy * 0.32 + rawEnergy * 0.68;
   const energy = Math.min(1, smoothedEnergy * profile.pulse);
-  updateLights(frequencyData, energy, rms, profile);
+  drawLiveSpectrum(frequencyData);
+  updateLights(frequencyData, energy, rms, profile, spectralFlux);
   updateMeter(energy);
   updatePlayerTime();
   maybeLogSignal(energy);
+  previousSpectrum = new Uint8Array(frequencyData);
 
   animationFrame = requestAnimationFrame(animate);
 }
 
-function updateLights(frequencyData, energy, rms, profile) {
+function updateLights(frequencyData, energy, rms, profile, spectralFlux) {
   const bands = getBands(frequencyData, 5);
   const time = audioContext ? audioContext.currentTime - startedAt : 0;
   const low = bands[0] ?? 0;
@@ -270,9 +281,9 @@ function updateLights(frequencyData, energy, rms, profile) {
   const midDelta = mid - previousMid;
   const highDelta = high - previousHigh;
   const rmsDelta = rms - previousRms;
-  const lowOnset = Math.max(0, lowDelta * 1.15 + rmsDelta * 1.35);
-  const tonalOnset = Math.max(0, midDelta * 1.35 + highDelta * 1.05 + energyDelta * 0.7);
-  const onsetStrength = Math.max(0, energyDelta * 1.05 + lowOnset + tonalOnset + high * 0.04);
+  const lowOnset = Math.max(0, lowDelta * 1.45 + rmsDelta * 1.4);
+  const tonalOnset = Math.max(0, midDelta * 2.3 + highDelta * 1.75 + spectralFlux * 2.55 + energyDelta * 0.58);
+  const onsetStrength = Math.max(0, energyDelta * 1.1 + lowOnset + tonalOnset + high * 0.055);
   updateMusicalClock({
     time,
     lowOnset,
@@ -284,7 +295,7 @@ function updateLights(frequencyData, energy, rms, profile) {
   });
   const clockPulse = shouldTriggerClockPulse(time);
   const isOnset = onsetStrength > profile.threshold || clockPulse;
-  const isStrongHit = onsetStrength > profile.threshold * 2.1 || rmsDelta > 0.085;
+  const isStrongHit = onsetStrength > profile.threshold * 3.2 || rmsDelta > 0.12;
 
   decayLightStates(profile.decay);
 
@@ -299,6 +310,7 @@ function updateLights(frequencyData, energy, rms, profile) {
       dominantBand,
       strong: isStrongHit,
       clockSource: musicalClock.source,
+      category: categoryForEnergy(energy),
     });
   } else if (shouldHoldSparseChase(time, profile, energy)) {
     triggerPattern({
@@ -312,6 +324,7 @@ function updateLights(frequencyData, energy, rms, profile) {
       strong: false,
       sparse: true,
       clockSource: musicalClock.source,
+      category: categoryForEnergy(energy),
     });
   }
 
@@ -331,7 +344,7 @@ function updateMusicalClock(reading) {
     { source: "high_pattern", strength: reading.tonalOnset * 0.82, minEnergy: reading.high },
   ];
   const candidate = candidates
-    .filter((item) => item.strength > 0.045 && item.minEnergy > 0.055)
+    .filter((item) => item.strength > 0.012 && item.minEnergy > 0.01)
     .sort((a, b) => b.strength - a.strength)[0];
 
   if (!candidate) {
@@ -342,12 +355,12 @@ function updateMusicalClock(reading) {
   if (musicalClock.lastPulseTime === null) {
     musicalClock.lastPulseTime = reading.time;
     musicalClock.source = candidate.source;
-    musicalClock.confidence = Math.max(musicalClock.confidence, 0.28);
+    musicalClock.confidence = Math.max(musicalClock.confidence, 0.36);
     return;
   }
 
   const interval = reading.time - musicalClock.lastPulseTime;
-  if (interval < 0.24) return;
+  if (interval < 0.18) return;
   if (interval > 1.6) {
     musicalClock.lastPulseTime = reading.time;
     musicalClock.confidence *= 0.72;
@@ -367,7 +380,7 @@ function updateMusicalClock(reading) {
 }
 
 function shouldTriggerClockPulse(time) {
-  if (!musicalClock.interval || musicalClock.confidence < 0.22) return false;
+  if (!musicalClock.interval || musicalClock.confidence < 0.16) return false;
   const elapsed = time - musicalClock.lastPulseTime;
   if (elapsed < musicalClock.interval * 0.92) return false;
   if (elapsed > musicalClock.interval * 1.35) return false;
@@ -388,8 +401,8 @@ function decayLightStates(decay) {
 
 function shouldHoldSparseChase(time, profile, energy) {
   if (!isPlaying) return false;
-  if (energy < 0.38) return false;
-  const framesPerStep = Math.max(18, Math.round(52 / profile.chase));
+  if (energy < 0.24 && musicalClock.source === "none") return false;
+  const framesPerStep = Math.max(12, Math.round(38 / profile.chase));
   return frameCounter % framesPerStep === 0 && time > 0.25;
 }
 
@@ -397,29 +410,34 @@ function triggerPattern(context) {
   const count = lights.length;
   if (!count) return;
 
-  const activeIndexes = pickActiveLights(context.profile, context.time, count, context.strong, context.sparse, context.clockSource);
+  const activeIndexes = pickActiveLights(context.profile, context.time, count, context.strong, context.sparse, context.clockSource, context.energy);
   activeIndexes.forEach((index, order) => {
     const colorIndex = pickColorIndex(context, index, order);
     const clockBoost = context.clockSource && context.clockSource !== "none" ? 0.08 : 0;
-    const base = context.strong ? 1 : context.sparse ? 0.42 : 0.72 + clockBoost;
+    const base = context.strong ? 0.96 : context.sparse ? 0.48 : 0.62 + clockBoost;
     const spectral = context.low * 0.2 + context.mid * 0.14 + context.high * 0.18;
     lightStates[index].intensity = clamp(base + spectral - order * 0.06, 0.28, 1);
     lightStates[index].age = 0;
     lightStates[index].colorIndex = colorIndex;
   });
 
-  if (context.strong && context.profile.motion === "hits") {
-    blackoutNonActive(activeIndexes, 0.04);
-  }
+  blackoutNonActive(activeIndexes, context.strong ? 0.08 : 0.025);
 }
 
-function pickActiveLights(profile, time, count, strong, sparse = false, clockSource = "none") {
+function pickActiveLights(profile, time, count, strong, sparse = false, clockSource = "none", energy = 0) {
   const interval = Math.max(musicalClock.interval ?? 0.5, 0.24);
   const pulseStep = Math.floor(time / interval);
   const step = Math.floor(time * 3.6 * profile.chase);
-  const spread = sparse ? 1 : strong ? Math.min(count, profile.spread + 1) : Math.min(count, profile.spread);
+  const differentiation = Number(elements.differentiation.value);
+  const stableScene = differentiation >= 6;
+  const weakGesture = !strong && (energy < 0.5 || clockSource === "mid_arpeggio");
+  const spread = sparse || weakGesture
+    ? 1
+    : strong
+      ? Math.min(count, profile.spread + (stableScene ? 0 : 1))
+      : Math.min(count, profile.spread);
 
-  if (clockSource === "mid_arpeggio" && !strong) {
+  if (weakGesture) {
     return musicalSingleOrPair(pulseStep, count, sparse);
   }
 
@@ -504,15 +522,18 @@ function uniqueIndexes(values, count) {
 }
 
 function pickColorIndex(context, index, order) {
-  const { profile, time, dominantBand, energy, high } = context;
+  const { profile, time, dominantBand, energy, high, category } = context;
+  const differentiation = Number(elements.differentiation.value);
+  const categoryOffset = category === "high_energy_drop" ? 2 : category === "steady_bass_pulse" ? 1 : 0;
   const phrase = Math.floor(time / 8);
   if (high > 0.62 && order === 0) {
     return 4;
   }
-  if (dominantBand >= 0 && dominantBand < colors.length && energy > 0.52) {
+  if (dominantBand >= 0 && dominantBand < colors.length && energy > 0.64 && differentiation <= 3) {
     return dominantBand;
   }
-  const chaseStep = Math.floor(time * profile.chase + index + phrase + order);
+  const stablePhrase = differentiation >= 6 ? Math.floor(time / 16) : phrase;
+  const chaseStep = Math.floor(time * profile.chase + index + stablePhrase + order + sceneVariant + categoryOffset);
   return profile.palette[chaseStep % profile.palette.length];
 }
 
@@ -581,12 +602,18 @@ function categoryForEnergy(energy) {
 function updateCategoryScene(category) {
   const threshold = Number(elements.differentiation.value);
   categoryCounters[category] = (categoryCounters[category] ?? 0) + 1;
+  if (category !== lastSceneCategory) {
+    lastSceneCategory = category;
+    sceneVariant = (sceneVariant + 1) % Math.max(2, threshold + 1);
+    return true;
+  }
   if (!currentSceneByCategory[category]) {
     currentSceneByCategory[category] = 0;
     return true;
   }
   if ((categoryCounters[category] - 1) % threshold === 0) {
     currentSceneByCategory[category] += 1;
+    sceneVariant = (sceneVariant + 1) % Math.max(2, threshold + 1);
     return true;
   }
   return false;
@@ -629,6 +656,15 @@ function getBands(values, bandCount) {
     bands.push(average(values.slice(start, end)) / 255);
   }
   return bands;
+}
+
+function getSpectralFlux(values) {
+  if (!previousSpectrum || !values.length) return 0;
+  let total = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    total += Math.max(0, values[index] - previousSpectrum[index]);
+  }
+  return clamp(total / (values.length * 255), 0, 1);
 }
 
 function indexOfMax(values) {
@@ -779,6 +815,44 @@ function drawOverviewPlayhead(current, duration) {
   context.stroke();
 }
 
+function drawLiveSpectrum(frequencyData) {
+  const canvas = elements.liveSpectrum;
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(260, Math.round(rect.width * ratio));
+  const height = Math.max(120, Math.round(rect.height * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  context.fillStyle = "rgba(13, 16, 17, 0.34)";
+  context.fillRect(0, 0, width, height);
+  drawOverviewGrid(context, width, height);
+
+  const bars = 42;
+  const gap = Math.max(1, Math.round(2 * ratio));
+  const barWidth = Math.max(2, Math.floor((width - gap * (bars - 1)) / bars));
+  const binsPerBar = Math.max(1, Math.floor(frequencyData.length / bars));
+  for (let bar = 0; bar < bars; bar += 1) {
+    const start = bar * binsPerBar;
+    const end = Math.min(frequencyData.length, start + binsPerBar);
+    let value = 0;
+    for (let index = start; index < end; index += 1) {
+      value += frequencyData[index];
+    }
+    value = value / Math.max(1, end - start) / 255;
+    const boosted = clamp(value * (inputMode === "mic_device" ? 3.6 : 2.1), 0, 1);
+    const x = bar * (barWidth + gap);
+    const barHeight = Math.max(2, boosted * height * 0.9);
+    const hue = bar < bars * 0.28 ? "255, 196, 87" : bar < bars * 0.66 ? "79, 195, 177" : "245, 247, 248";
+    context.fillStyle = `rgba(${hue}, ${0.2 + boosted * 0.72})`;
+    context.fillRect(x, height - barHeight, barWidth, barHeight);
+  }
+}
+
 async function seekToSliderValue(value) {
   if (!audioBuffer || inputMode !== "file") return;
   const wasPlaying = isPlaying;
@@ -812,6 +886,7 @@ async function toggleTransport() {
 function setInputMode(mode) {
   inputMode = mode;
   const fileMode = mode === "file";
+  document.body.classList.toggle("is-mic-mode", mode === "mic_device");
   elements.audioFile.disabled = !fileMode;
   elements.audioFile.closest(".file-control").classList.toggle("disabled", !fileMode);
   elements.audioDevice.disabled = fileMode;
@@ -839,19 +914,34 @@ async function refreshAudioDevices() {
   }
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const audioInputs = devices.filter((device) => device.kind === "audioinput");
+    const audioInputs = devices.filter((device) => {
+      if (device.kind !== "audioinput") return false;
+      const label = device.label.toLowerCase();
+      if (label.includes("zoom")) return false;
+      if (label.includes("virtual")) return false;
+      return true;
+    });
     const previous = elements.audioDevice.value;
     elements.audioDevice.innerHTML = '<option value="">Default audio input</option>';
     audioInputs.forEach((device, index) => {
       const option = document.createElement("option");
       option.value = device.deviceId;
-      option.textContent = device.label || `Audio input ${index + 1}`;
+      option.textContent = normalizeInputDeviceName(device.label, index);
       elements.audioDevice.appendChild(option);
     });
     elements.audioDevice.value = previous;
   } catch (error) {
     logEvent(`mic list ${error.message}`);
   }
+}
+
+function normalizeInputDeviceName(label, index) {
+  const clean = label.trim();
+  if (!clean) return index === 0 ? "MacBook Air microphone" : `External mic ${index}`;
+  if (/macbook|built-in|integrated|microphone/i.test(clean)) {
+    return "MacBook Air microphone";
+  }
+  return clean;
 }
 
 async function startDeviceInput() {
@@ -1029,3 +1119,5 @@ function stopDrag(event) {
 }
 
 buildLights(Number(elements.lightCount.value), false);
+setInputMode(elements.inputSource.value);
+drawTrackOverview();

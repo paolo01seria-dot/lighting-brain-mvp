@@ -101,6 +101,18 @@ p {
   opacity: 0.45;
 }
 
+.is-mic-mode .source-file-panel,
+.is-mic-mode .source-file-control,
+.source-mic-panel,
+.device-control {
+  display: none;
+}
+
+.is-mic-mode .source-mic-panel,
+.is-mic-mode .device-control {
+  display: block;
+}
+
 label,
 .file-control {
   display: grid;
@@ -244,7 +256,8 @@ button:disabled {
   transition: width 80ms linear;
 }
 
-.track-overview {
+.track-overview,
+.live-spectrum {
   display: block;
   width: 100%;
   height: 132px;

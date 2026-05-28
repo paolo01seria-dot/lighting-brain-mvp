@@ -52,7 +52,7 @@ funzionare anche quando riceve solo audio.
 Ordine consigliato:
 
 1. File audio locale, gia' presente nella UI demo.
-2. Audio live del Mac, usando `sounddevice` come primo MVP.
+2. Mic Device / ingresso audio, utile per test rapidi e prototipi live.
 3. Audio di sistema del Mac tramite dispositivo virtuale/loopback quando serve
    leggere qualunque player senza integrazione dedicata.
 4. Rekordbox come player DJ prioritario: prima via file/export/metadata, poi
@@ -62,6 +62,12 @@ Ordine consigliato:
 
 Principio: prima catturiamo l'audio in modo affidabile dal Mac, poi aggiungiamo
 adapter specifici per i player.
+
+Nota terminologica: `Mic Device` indica microfono o ingresso audio esposto dal
+browser. `System Audio` indica invece l'uscita audio del Mac, cioe' quello che
+sta suonando Rekordbox/Spotify/altro anche se gli speaker sono a volume basso o
+muti. Per `System Audio` su macOS serve in pratica un dispositivo loopback
+virtuale o una app desktop nativa che legga l'audio di sistema.
 
 ## Altri player da considerare
 
@@ -77,13 +83,14 @@ adapter specifici per i player.
 
 L'interfaccia futura dovrebbe avere un menu tipo:
 
-- File audio
+- Load file
+- Mic Device
+- System Audio
 - Rekordbox
 - Serato
 - Traktor
 - VirtualDJ
 - Engine DJ
-- Audio live dal Mac
 
 Ogni sorgente usa un adapter diverso, ma il resto del sistema riceve sempre lo
 stesso formato normalizzato.

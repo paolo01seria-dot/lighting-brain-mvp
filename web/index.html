@@ -18,9 +18,27 @@
         </div>
 
         <div class="controls">
+          <label>
+            <span>Input</span>
+            <select id="inputSource">
+              <option value="file">Load file</option>
+              <option value="mic_device">Mic Device</option>
+              <option value="system_audio" disabled>System Audio</option>
+              <option value="rekordbox" disabled>Rekordbox</option>
+              <option value="spotify" disabled>Spotify</option>
+            </select>
+          </label>
+
           <label class="file-control">
             <span>Load audio</span>
             <input id="audioFile" type="file" accept="audio/*">
+          </label>
+
+          <label class="device-control">
+            <span>Device</span>
+            <select id="audioDevice" disabled>
+              <option value="">Default audio input</option>
+            </select>
           </label>
 
           <label>
@@ -60,6 +78,12 @@
             <button id="stopButton" type="button" disabled>Stop</button>
           </div>
         </div>
+
+        <div class="mini-player" aria-label="Audio position">
+          <span id="currentTimeLabel">0:00</span>
+          <input id="seekSlider" type="range" min="0" max="1000" value="0" disabled>
+          <span id="durationLabel">0:00</span>
+        </div>
       </section>
 
       <section class="tester-layout">
@@ -79,6 +103,7 @@
           <div class="meter">
             <div id="energyFill"></div>
           </div>
+          <canvas id="trackOverview" class="track-overview" width="520" height="132" aria-label="Track overview"></canvas>
           <div class="event-log" id="eventLog" aria-live="polite"></div>
         </aside>
 

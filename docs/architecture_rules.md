@@ -85,3 +85,13 @@ movement, strobe modulation or color step progression.
 
 The system must not assume BPM only comes from bass. In sparse intros, a stable
 mid/high arpeggio can be the primary musical clock until the bass enters.
+
+Input sources must stay semantically clear. Mic Device means microphone or
+physical input capture. System Audio means capturing the audio stream generated
+by Rekordbox, Spotify or another player, even if the speakers are muted or low.
+Those two paths should share the same analyzer after capture, but they are not
+the same adapter.
+
+Offline file analysis can expose a waveform/spectrogram-style overview before
+playback. That visual map is useful for labeling intros, buildups, drops and
+sparse arpeggiated sections, then later feeding better section detection.

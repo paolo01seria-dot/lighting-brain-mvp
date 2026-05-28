@@ -15,7 +15,9 @@ const genreProfiles = {
 };
 
 const elements = {
+  inputSource: document.querySelector("#inputSource"),
   audioFile: document.querySelector("#audioFile"),
+  audioDevice: document.querySelector("#audioDevice"),
   trackLabel: document.querySelector("#trackLabel"),
   outputTarget: document.querySelector("#outputTarget"),
   outputLabel: document.querySelector("#outputLabel"),
@@ -25,10 +27,14 @@ const elements = {
   stateLabel: document.querySelector("#stateLabel"),
   energyLabel: document.querySelector("#energyLabel"),
   energyFill: document.querySelector("#energyFill"),
+  trackOverview: document.querySelector("#trackOverview"),
   eventLog: document.querySelector("#eventLog"),
   lightCount: document.querySelector("#lightCount"),
   differentiation: document.querySelector("#differentiation"),
   differentiationValue: document.querySelector("#differentiationValue"),
+  seekSlider: document.querySelector("#seekSlider"),
+  currentTimeLabel: document.querySelector("#currentTimeLabel"),
+  durationLabel: document.querySelector("#durationLabel"),
   resetLayoutButton: document.querySelector("#resetLayoutButton"),
   stage: document.querySelector("#stage"),
 };
@@ -36,10 +42,15 @@ const elements = {
 let audioContext;
 let analyser;
 let sourceNode;
+let mediaStream;
+let mediaSourceNode;
 let audioBuffer;
 let startedAt = 0;
 let pausedAt = 0;
 let animationFrame;
+let isPlaying = false;
+let inputMode = "file";
+let overviewCacheCanvas;
 let smoothedEnergy = 0;
 let previousEnergy = 0;
 let previousLow = 0;
@@ -114,7 +125,6 @@ async function ensureAudioContext() {
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.72;
-    analyser.connect(audioContext.destination);
   }
   if (audioContext.state === "suspended") {
     await audioContext.resume();
@@ -123,13 +133,18 @@ async function ensureAudioContext() {
 
 async function loadAudioFile(file) {
   await ensureAudioContext();
-  stopPlayback();
+  stopDeviceInput();
+  stopPlayback({ resetPosition: true });
   const data = await file.arrayBuffer();
   audioBuffer = await audioContext.decodeAudioData(data);
+  overviewCacheCanvas = null;
   pausedAt = 0;
   elements.trackLabel.textContent = file.name;
   elements.playButton.disabled = false;
   elements.stopButton.disabled = false;
+  elements.seekSlider.disabled = false;
+  drawTrackOverview();
+  updatePlayerTime();
   setState("Ready");
   logEvent(`loaded ${file.name}`);
 }
@@ -139,9 +154,10 @@ function createSource() {
   const node = audioContext.createBufferSource();
   node.buffer = audioBuffer;
   node.connect(analyser);
+  node.connect(audioContext.destination);
   node.onended = () => {
     if (sourceNode === node) {
-      stopPlayback();
+      stopPlayback({ resetPosition: true });
     }
   };
   return node;
@@ -150,15 +166,33 @@ function createSource() {
 async function playAudio() {
   if (!audioBuffer) return;
   await ensureAudioContext();
+  cancelAnimationFrame(animationFrame);
+  stopSourceNode();
+  if (pausedAt >= audioBuffer.duration) {
+    pausedAt = 0;
+  }
   sourceNode = createSource();
   startedAt = audioContext.currentTime - pausedAt;
   sourceNode.start(0, pausedAt);
+  isPlaying = true;
   setState("Playing");
-  elements.playButton.disabled = true;
+  elements.playButton.textContent = "Pause";
+  elements.stopButton.disabled = false;
   animate();
 }
 
-function stopPlayback() {
+function pauseAudio() {
+  if (!sourceNode || !audioContext) return;
+  pausedAt = clamp(audioContext.currentTime - startedAt, 0, audioBuffer?.duration ?? 0);
+  stopSourceNode();
+  isPlaying = false;
+  cancelAnimationFrame(animationFrame);
+  setState("Paused");
+  elements.playButton.textContent = "Play";
+  updatePlayerTime();
+}
+
+function stopSourceNode() {
   if (sourceNode) {
     try {
       sourceNode.onended = null;
@@ -168,7 +202,15 @@ function stopPlayback() {
     }
   }
   sourceNode = null;
-  pausedAt = 0;
+}
+
+function stopPlayback(options = {}) {
+  const { resetPosition = true, keepLights = false } = options;
+  stopSourceNode();
+  isPlaying = false;
+  if (resetPosition) {
+    pausedAt = 0;
+  }
   cancelAnimationFrame(animationFrame);
   smoothedEnergy = 0;
   previousEnergy = 0;
@@ -188,11 +230,15 @@ function stopPlayback() {
   currentSceneByCategory = {};
   setState(audioBuffer ? "Ready" : "Idle");
   elements.playButton.disabled = !audioBuffer;
-  blackoutLights();
+  elements.playButton.textContent = "Play";
+  elements.stopButton.disabled = !audioBuffer;
+  if (!keepLights) blackoutLights();
   updateMeter(0);
+  updatePlayerTime();
 }
 
 function animate() {
+  if (!analyser || !isPlaying) return;
   const frequencyData = new Uint8Array(analyser.frequencyBinCount);
   const timeData = new Uint8Array(analyser.fftSize);
   analyser.getByteFrequencyData(frequencyData);
@@ -206,6 +252,7 @@ function animate() {
   const energy = Math.min(1, smoothedEnergy * profile.pulse);
   updateLights(frequencyData, energy, rms, profile);
   updateMeter(energy);
+  updatePlayerTime();
   maybeLogSignal(energy);
 
   animationFrame = requestAnimationFrame(animate);
@@ -284,7 +331,7 @@ function updateMusicalClock(reading) {
     { source: "high_pattern", strength: reading.tonalOnset * 0.82, minEnergy: reading.high },
   ];
   const candidate = candidates
-    .filter((item) => item.strength > 0.075 && item.minEnergy > 0.12)
+    .filter((item) => item.strength > 0.045 && item.minEnergy > 0.055)
     .sort((a, b) => b.strength - a.strength)[0];
 
   if (!candidate) {
@@ -295,20 +342,20 @@ function updateMusicalClock(reading) {
   if (musicalClock.lastPulseTime === null) {
     musicalClock.lastPulseTime = reading.time;
     musicalClock.source = candidate.source;
-    musicalClock.confidence = Math.max(musicalClock.confidence, 0.18);
+    musicalClock.confidence = Math.max(musicalClock.confidence, 0.28);
     return;
   }
 
   const interval = reading.time - musicalClock.lastPulseTime;
   if (interval < 0.24) return;
-  if (interval > 1.25) {
+  if (interval > 1.6) {
     musicalClock.lastPulseTime = reading.time;
     musicalClock.confidence *= 0.72;
     return;
   }
 
   const previousInterval = musicalClock.interval ?? interval;
-  const stable = Math.abs(interval - previousInterval) < 0.16;
+  const stable = Math.abs(interval - previousInterval) < 0.2;
   musicalClock.interval = previousInterval * 0.68 + interval * 0.32;
   musicalClock.lastPulseTime = reading.time;
   musicalClock.source = candidate.source;
@@ -320,7 +367,7 @@ function updateMusicalClock(reading) {
 }
 
 function shouldTriggerClockPulse(time) {
-  if (!musicalClock.interval || musicalClock.confidence < 0.34) return false;
+  if (!musicalClock.interval || musicalClock.confidence < 0.22) return false;
   const elapsed = time - musicalClock.lastPulseTime;
   if (elapsed < musicalClock.interval * 0.92) return false;
   if (elapsed > musicalClock.interval * 1.35) return false;
@@ -340,7 +387,7 @@ function decayLightStates(decay) {
 }
 
 function shouldHoldSparseChase(time, profile, energy) {
-  if (!sourceNode) return false;
+  if (!isPlaying) return false;
   if (energy < 0.38) return false;
   const framesPerStep = Math.max(18, Math.round(52 / profile.chase));
   return frameCounter % framesPerStep === 0 && time > 0.25;
@@ -350,7 +397,7 @@ function triggerPattern(context) {
   const count = lights.length;
   if (!count) return;
 
-  const activeIndexes = pickActiveLights(context.profile, context.time, count, context.strong, context.sparse);
+  const activeIndexes = pickActiveLights(context.profile, context.time, count, context.strong, context.sparse, context.clockSource);
   activeIndexes.forEach((index, order) => {
     const colorIndex = pickColorIndex(context, index, order);
     const clockBoost = context.clockSource && context.clockSource !== "none" ? 0.08 : 0;
@@ -366,9 +413,19 @@ function triggerPattern(context) {
   }
 }
 
-function pickActiveLights(profile, time, count, strong, sparse = false) {
+function pickActiveLights(profile, time, count, strong, sparse = false, clockSource = "none") {
+  const interval = Math.max(musicalClock.interval ?? 0.5, 0.24);
+  const pulseStep = Math.floor(time / interval);
   const step = Math.floor(time * 3.6 * profile.chase);
   const spread = sparse ? 1 : strong ? Math.min(count, profile.spread + 1) : Math.min(count, profile.spread);
+
+  if (clockSource === "mid_arpeggio" && !strong) {
+    return musicalSingleOrPair(pulseStep, count, sparse);
+  }
+
+  if (clockSource === "high_pattern" && strong) {
+    return symmetricalIndexes(pulseStep, count, Math.min(count, 4));
+  }
 
   if (profile.motion === "hits") {
     if (strong) {
@@ -378,7 +435,7 @@ function pickActiveLights(profile, time, count, strong, sparse = false) {
   }
 
   if (profile.motion === "scan") {
-    return uniqueIndexes(Array.from({ length: spread }, (_, offset) => step + offset), count);
+    return symmetricalIndexes(pulseStep, count, spread);
   }
 
   if (profile.motion === "stagger") {
@@ -390,6 +447,49 @@ function pickActiveLights(profile, time, count, strong, sparse = false) {
   }
 
   return uniqueIndexes(Array.from({ length: spread }, (_, offset) => step + offset), count);
+}
+
+function musicalSingleOrPair(step, count, sparse) {
+  if (count <= 1) return [0];
+  const pair = symmetricalPair(step, count);
+  if (sparse || step % 4 !== 0) {
+    return [pair[step % 2]];
+  }
+  return pair;
+}
+
+function symmetricalIndexes(step, count, spread) {
+  if (count <= 1) return [0];
+  const pair = symmetricalPair(step, count);
+  const result = [...pair];
+  let offset = 1;
+  while (result.length < spread) {
+    const nextPair = symmetricalPair(step + offset, count);
+    nextPair.forEach((index) => {
+      if (result.length < spread && !result.includes(index)) {
+        result.push(index);
+      }
+    });
+    offset += 1;
+  }
+  return result;
+}
+
+function symmetricalPair(step, count) {
+  if (count <= 1) return [0];
+  const pairPresets = buildSymmetryPairs(count);
+  return pairPresets[step % pairPresets.length];
+}
+
+function buildSymmetryPairs(count) {
+  const pairs = [];
+  const topLeft = Math.max(0, Math.round(count * 0.88) % count);
+  const topRight = Math.max(0, Math.round(count * 0.12) % count);
+  pairs.push(uniqueIndexes([topLeft, topRight], count));
+  pairs.push(uniqueIndexes([Math.round(count * 0.75), Math.round(count * 0.25)], count));
+  pairs.push(uniqueIndexes([0, Math.floor(count / 2)], count));
+  pairs.push(uniqueIndexes([Math.round(count * 0.62), Math.round(count * 0.38)], count));
+  return pairs.filter((pair) => pair.length > 0);
 }
 
 function uniqueIndexes(values, count) {
@@ -440,9 +540,9 @@ function renderLights() {
     const visible = intensity > 0.04;
 
     light.style.background = visible
-      ? `rgba(${r}, ${g}, ${b}, ${0.22 + intensity * 0.78})`
+      ? `radial-gradient(circle at 50% 44%, rgba(255, 255, 255, ${0.18 + intensity * 0.42}) 0 12%, rgba(${r}, ${g}, ${b}, ${0.34 + intensity * 0.58}) 13% 48%, rgba(${r}, ${g}, ${b}, ${0.12 + intensity * 0.22}) 49% 72%, rgba(0, 0, 0, 0.58) 73%)`
       : "";
-    light.style.opacity = visible ? (0.1 + intensity * 0.9).toFixed(3) : "0.62";
+    light.style.opacity = visible ? (0.24 + intensity * 0.76).toFixed(3) : "0.82";
     light.style.boxShadow = visible
       ? `0 0 ${Math.round(10 + intensity * 54)}px rgba(${r}, ${g}, ${b}, ${intensity * 0.84})`
       : "";
@@ -461,7 +561,7 @@ function updateMeter(energy) {
 function maybeLogSignal(energy) {
   const currentSecond = Math.floor(audioContext.currentTime - startedAt);
   if (currentSecond === lastEventSecond || currentSecond < 0) return;
-  if (currentSecond % 4 !== 0) return;
+  if (currentSecond % 2 !== 0) return;
   lastEventSecond = currentSecond;
 
   const output = elements.outputTarget.value;
@@ -552,9 +652,265 @@ function formatTime(seconds) {
   return `${minutes}:${rest}`;
 }
 
+function currentPlaybackTime() {
+  if (inputMode === "mic_device") {
+    return audioContext && isPlaying ? Math.max(0, audioContext.currentTime - startedAt) : 0;
+  }
+  if (!audioBuffer) return 0;
+  if (isPlaying && audioContext) {
+    return clamp(audioContext.currentTime - startedAt, 0, audioBuffer.duration);
+  }
+  return clamp(pausedAt, 0, audioBuffer.duration);
+}
+
+function updatePlayerTime() {
+  const current = currentPlaybackTime();
+  const duration = inputMode === "mic_device" ? 0 : audioBuffer?.duration ?? 0;
+  elements.currentTimeLabel.textContent = formatTime(Math.floor(current));
+  elements.durationLabel.textContent = inputMode === "mic_device" ? "live" : formatTime(Math.floor(duration));
+  drawOverviewPlayhead(current, duration);
+  if (!audioBuffer || inputMode !== "file") {
+    elements.seekSlider.value = "0";
+    elements.seekSlider.disabled = true;
+    return;
+  }
+  elements.seekSlider.disabled = false;
+  elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
+}
+
+function drawTrackOverview() {
+  const canvas = elements.trackOverview;
+  const context = canvas.getContext("2d");
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(260, Math.round(rect.width * ratio));
+  const height = Math.max(120, Math.round(rect.height * ratio));
+  canvas.width = width;
+  canvas.height = height;
+
+  if (!audioBuffer) {
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = "#0d1011";
+    context.fillRect(0, 0, width, height);
+    drawOverviewGrid(context, width, height);
+    return;
+  }
+
+  if (overviewCacheCanvas && overviewCacheCanvas.width === width && overviewCacheCanvas.height === height) {
+    context.drawImage(overviewCacheCanvas, 0, 0);
+    return;
+  }
+
+  overviewCacheCanvas = document.createElement("canvas");
+  overviewCacheCanvas.width = width;
+  overviewCacheCanvas.height = height;
+  const overviewContext = overviewCacheCanvas.getContext("2d");
+  overviewContext.fillStyle = "#0d1011";
+  overviewContext.fillRect(0, 0, width, height);
+
+  const data = audioBuffer.getChannelData(0);
+  const samplesPerPixel = Math.max(1, Math.floor(data.length / width));
+  drawOverviewGrid(overviewContext, width, height);
+
+  for (let x = 0; x < width; x += 1) {
+    const start = x * samplesPerPixel;
+    const end = Math.min(data.length, start + samplesPerPixel);
+    let peak = 0;
+    let rms = 0;
+    let crossings = 0;
+    let previous = data[start] ?? 0;
+
+    for (let index = start; index < end; index += 1) {
+      const value = data[index];
+      const absolute = Math.abs(value);
+      peak = Math.max(peak, absolute);
+      rms += value * value;
+      if ((previous <= 0 && value > 0) || (previous >= 0 && value < 0)) {
+        crossings += 1;
+      }
+      previous = value;
+    }
+
+    const windowSize = Math.max(1, end - start);
+    rms = Math.sqrt(rms / windowSize);
+    const brightness = clamp(crossings / Math.max(12, windowSize * 0.18), 0, 1);
+    const center = height * 0.5;
+    const lowHeight = Math.max(1, peak * height * 0.4);
+    const midHeight = Math.max(1, rms * height * 1.15);
+    const highHeight = Math.max(1, brightness * rms * height * 0.86);
+
+    overviewContext.fillStyle = `rgba(79, 195, 177, ${0.18 + rms * 1.6})`;
+    overviewContext.fillRect(x, center - midHeight, 1, midHeight * 2);
+    overviewContext.fillStyle = `rgba(255, 196, 87, ${0.16 + peak * 0.62})`;
+    overviewContext.fillRect(x, center - lowHeight * 0.5, 1, lowHeight);
+    overviewContext.fillStyle = `rgba(245, 247, 248, ${0.08 + highHeight / height})`;
+    overviewContext.fillRect(x, Math.max(0, center - lowHeight - highHeight), 1, highHeight);
+  }
+  context.drawImage(overviewCacheCanvas, 0, 0);
+}
+
+function drawOverviewGrid(context, width, height) {
+  context.strokeStyle = "rgba(255, 255, 255, 0.06)";
+  context.lineWidth = 1;
+  for (let line = 1; line < 4; line += 1) {
+    const y = (height / 4) * line;
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+}
+
+function drawOverviewPlayhead(current, duration) {
+  if (!audioBuffer || inputMode !== "file") return;
+  drawTrackOverview();
+  const canvas = elements.trackOverview;
+  const context = canvas.getContext("2d");
+  if (overviewCacheCanvas) {
+    context.drawImage(overviewCacheCanvas, 0, 0);
+  }
+  const progress = clamp(current / Math.max(duration, 0.001), 0, 1);
+  const x = Math.round(progress * canvas.width);
+  context.strokeStyle = "rgba(255, 255, 255, 0.92)";
+  context.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+  context.beginPath();
+  context.moveTo(x, 0);
+  context.lineTo(x, canvas.height);
+  context.stroke();
+}
+
+async function seekToSliderValue(value) {
+  if (!audioBuffer || inputMode !== "file") return;
+  const wasPlaying = isPlaying;
+  pausedAt = (Number(value) / 1000) * audioBuffer.duration;
+  if (wasPlaying) {
+    cancelAnimationFrame(animationFrame);
+    stopSourceNode();
+    await playAudio();
+  } else {
+    updatePlayerTime();
+  }
+}
+
+async function toggleTransport() {
+  if (inputMode === "mic_device") {
+    if (isPlaying) {
+      stopDeviceInput();
+    } else {
+      await startDeviceInput();
+    }
+    return;
+  }
+
+  if (isPlaying) {
+    pauseAudio();
+  } else {
+    await playAudio();
+  }
+}
+
+function setInputMode(mode) {
+  inputMode = mode;
+  const fileMode = mode === "file";
+  elements.audioFile.disabled = !fileMode;
+  elements.audioFile.closest(".file-control").classList.toggle("disabled", !fileMode);
+  elements.audioDevice.disabled = fileMode;
+  if (fileMode) {
+    stopDeviceInput();
+    setState(audioBuffer ? "Ready" : "Idle");
+    elements.playButton.textContent = "Play";
+    elements.playButton.disabled = !audioBuffer;
+    elements.stopButton.disabled = !audioBuffer;
+  } else {
+    stopPlayback({ resetPosition: false, keepLights: true });
+    setState("Mic ready");
+    elements.playButton.textContent = "Listen";
+    elements.playButton.disabled = false;
+    elements.stopButton.disabled = true;
+    refreshAudioDevices();
+  }
+  updatePlayerTime();
+}
+
+async function refreshAudioDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    elements.audioDevice.innerHTML = '<option value="">Audio devices unavailable</option>';
+    return;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter((device) => device.kind === "audioinput");
+    const previous = elements.audioDevice.value;
+    elements.audioDevice.innerHTML = '<option value="">Default audio input</option>';
+    audioInputs.forEach((device, index) => {
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.textContent = device.label || `Audio input ${index + 1}`;
+      elements.audioDevice.appendChild(option);
+    });
+    elements.audioDevice.value = previous;
+  } catch (error) {
+    logEvent(`mic list ${error.message}`);
+  }
+}
+
+async function startDeviceInput() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setState("Mic error");
+    logEvent("Mic Device richiede localhost o HTTPS");
+    return;
+  }
+
+  await ensureAudioContext();
+  stopPlayback({ resetPosition: false, keepLights: true });
+  stopDeviceInput(false);
+
+  const selectedDevice = elements.audioDevice.value;
+  const constraints = selectedDevice
+    ? { audio: { deviceId: { exact: selectedDevice }, echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
+    : { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
+  mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+  mediaSourceNode = audioContext.createMediaStreamSource(mediaStream);
+  mediaSourceNode.connect(analyser);
+  startedAt = audioContext.currentTime;
+  pausedAt = 0;
+  isPlaying = true;
+  elements.playButton.textContent = "Pause";
+  elements.stopButton.disabled = false;
+  elements.trackLabel.textContent = "Mic Device";
+  setState("Listening");
+  await refreshAudioDevices();
+  animate();
+  logEvent("mic device live");
+}
+
+function stopDeviceInput(resetUi = true) {
+  if (mediaSourceNode) {
+    mediaSourceNode.disconnect();
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((track) => track.stop());
+  }
+  mediaSourceNode = null;
+  mediaStream = null;
+  if (inputMode === "mic_device") {
+    isPlaying = false;
+    cancelAnimationFrame(animationFrame);
+    if (resetUi) {
+      setState("Mic ready");
+      elements.playButton.textContent = "Listen";
+      elements.stopButton.disabled = true;
+      updateMeter(0);
+      updatePlayerTime();
+    }
+  }
+}
+
 elements.audioFile.addEventListener("change", (event) => {
   const [file] = event.target.files;
   if (file) {
+    elements.inputSource.value = "file";
+    setInputMode("file");
     loadAudioFile(file).catch((error) => {
       setState("Load error");
       logEvent(error.message);
@@ -563,13 +919,58 @@ elements.audioFile.addEventListener("change", (event) => {
 });
 
 elements.playButton.addEventListener("click", () => {
-  playAudio().catch((error) => {
-    setState("Play error");
+  toggleTransport().catch((error) => {
+    const micDenied = inputMode === "mic_device" && /permission|denied|notallowed/i.test(error.message);
+    setState(micDenied ? "Mic denied" : "Play error");
+    logEvent(micDenied ? "microphone permission denied" : error.message);
+  });
+});
+
+elements.stopButton.addEventListener("click", () => {
+  if (inputMode === "mic_device") {
+    stopDeviceInput();
+    blackoutLights();
+  } else {
+    stopPlayback({ resetPosition: true });
+  }
+});
+
+elements.inputSource.addEventListener("change", () => {
+  setInputMode(elements.inputSource.value);
+});
+
+elements.audioDevice.addEventListener("change", () => {
+  if (inputMode === "mic_device" && isPlaying) {
+    startDeviceInput().catch((error) => {
+      const micDenied = /permission|denied|notallowed/i.test(error.message);
+      setState(micDenied ? "Mic denied" : "Mic error");
+      logEvent(micDenied ? "microphone permission denied" : error.message);
+    });
+  }
+});
+
+elements.seekSlider.addEventListener("input", () => {
+  seekToSliderValue(elements.seekSlider.value).catch((error) => {
+    setState("Seek error");
     logEvent(error.message);
   });
 });
 
-elements.stopButton.addEventListener("click", stopPlayback);
+elements.trackOverview.addEventListener("click", (event) => {
+  if (!audioBuffer || inputMode !== "file") return;
+  const rect = elements.trackOverview.getBoundingClientRect();
+  const progress = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+  seekToSliderValue(progress * 1000).catch((error) => {
+    setState("Seek error");
+    logEvent(error.message);
+  });
+});
+
+window.addEventListener("resize", () => {
+  overviewCacheCanvas = null;
+  drawTrackOverview();
+  updatePlayerTime();
+});
 
 elements.outputTarget.addEventListener("change", () => {
   const selected = elements.outputTarget.options[elements.outputTarget.selectedIndex].text;

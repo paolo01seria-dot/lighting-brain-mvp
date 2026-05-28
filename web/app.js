@@ -43,6 +43,9 @@ const elements = {
 let audioContext;
 let analyser;
 let sourceNode;
+let audioElement;
+let mediaElementSource;
+let objectUrl;
 let mediaStream;
 let mediaSourceNode;
 let audioBuffer;
@@ -140,21 +143,23 @@ async function loadAudioFile(file) {
   await ensureAudioContext();
   stopDeviceInput();
   stopPlayback({ resetPosition: true });
-  let decodedBuffer;
+  if (objectUrl) {
+    URL.revokeObjectURL(objectUrl);
+  }
+  objectUrl = URL.createObjectURL(file);
+  ensureAudioElement();
+  audioElement.src = objectUrl;
+  audioElement.load();
+
+  const data = await file.arrayBuffer();
   try {
-    const data = await file.arrayBuffer();
-    decodedBuffer = await audioContext.decodeAudioData(data);
+    audioBuffer = await audioContext.decodeAudioData(data.slice(0));
   } catch (error) {
     audioBuffer = null;
-    loadedFileName = "";
-    elements.trackLabel.textContent = "Load failed";
-    elements.playButton.disabled = true;
-    elements.stopButton.disabled = true;
-    elements.seekSlider.disabled = true;
-    updatePlayerTime();
-    throw error;
+    logEvent("overview unavailable");
   }
-  audioBuffer = decodedBuffer;
+
+  await waitForAudioMetadata();
   loadedFileName = file.name;
   overviewCacheCanvas = null;
   pausedAt = 0;
@@ -168,31 +173,55 @@ async function loadAudioFile(file) {
   logEvent(`loaded ${file.name}`);
 }
 
-function createSource() {
-  if (!audioBuffer) return null;
-  const node = audioContext.createBufferSource();
-  node.buffer = audioBuffer;
-  node.connect(analyser);
-  node.connect(audioContext.destination);
-  node.onended = () => {
-    if (sourceNode === node) {
+function ensureAudioElement() {
+  if (!audioElement) {
+    audioElement = new Audio();
+    audioElement.preload = "auto";
+    audioElement.addEventListener("ended", () => {
       stopPlayback({ resetPosition: true });
-    }
-  };
-  return node;
+    });
+  }
+  if (!mediaElementSource) {
+    mediaElementSource = audioContext.createMediaElementSource(audioElement);
+    mediaElementSource.connect(analyser);
+    mediaElementSource.connect(audioContext.destination);
+  }
+}
+
+function waitForAudioMetadata() {
+  if (!audioElement) return Promise.resolve();
+  if (Number.isFinite(audioElement.duration) && audioElement.duration > 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      audioElement.removeEventListener("loadedmetadata", onMetadata);
+      audioElement.removeEventListener("error", onError);
+    };
+    const onMetadata = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Audio file not supported"));
+    };
+    audioElement.addEventListener("loadedmetadata", onMetadata, { once: true });
+    audioElement.addEventListener("error", onError, { once: true });
+  });
 }
 
 async function playAudio() {
-  if (!audioBuffer) return;
+  if (!audioElement) return;
   await ensureAudioContext();
   cancelAnimationFrame(animationFrame);
   stopSourceNode();
-  if (pausedAt >= audioBuffer.duration) {
+  if (pausedAt >= getAudioDuration()) {
     pausedAt = 0;
   }
-  sourceNode = createSource();
+  audioElement.currentTime = pausedAt;
   startedAt = audioContext.currentTime - pausedAt;
-  sourceNode.start(0, pausedAt);
+  await audioElement.play();
   isPlaying = true;
   setState("Playing");
   elements.playButton.textContent = "Pause";
@@ -201,9 +230,9 @@ async function playAudio() {
 }
 
 function pauseAudio() {
-  if (!sourceNode || !audioContext) return;
-  pausedAt = clamp(audioContext.currentTime - startedAt, 0, audioBuffer?.duration ?? 0);
-  stopSourceNode();
+  if (!audioElement || !audioContext) return;
+  pausedAt = clamp(audioElement.currentTime, 0, getAudioDuration());
+  audioElement.pause();
   isPlaying = false;
   cancelAnimationFrame(animationFrame);
   setState("Paused");
@@ -226,6 +255,12 @@ function stopSourceNode() {
 function stopPlayback(options = {}) {
   const { resetPosition = true, keepLights = false } = options;
   stopSourceNode();
+  if (audioElement) {
+    audioElement.pause();
+    if (resetPosition) {
+      audioElement.currentTime = 0;
+    }
+  }
   isPlaying = false;
   if (resetPosition) {
     pausedAt = 0;
@@ -250,10 +285,10 @@ function stopPlayback(options = {}) {
   lastEventSecond = -1;
   categoryCounters = {};
   currentSceneByCategory = {};
-  setState(audioBuffer ? "Ready" : "Idle");
-  elements.playButton.disabled = !audioBuffer;
+  setState(hasLoadedAudio() ? "Ready" : "Idle");
+  elements.playButton.disabled = !hasLoadedAudio();
   elements.playButton.textContent = "Play";
-  elements.stopButton.disabled = !audioBuffer;
+  elements.stopButton.disabled = !hasLoadedAudio();
   if (!keepLights) blackoutLights();
   updateMeter(0);
   updatePlayerTime();
@@ -707,26 +742,37 @@ function currentPlaybackTime() {
   if (inputMode === "mic_device") {
     return audioContext && isPlaying ? Math.max(0, audioContext.currentTime - startedAt) : 0;
   }
-  if (!audioBuffer) return 0;
-  if (isPlaying && audioContext) {
-    return clamp(audioContext.currentTime - startedAt, 0, audioBuffer.duration);
+  if (!hasLoadedAudio()) return 0;
+  if (audioElement) {
+    return clamp(audioElement.currentTime || pausedAt, 0, getAudioDuration());
   }
-  return clamp(pausedAt, 0, audioBuffer.duration);
+  return clamp(pausedAt, 0, getAudioDuration());
 }
 
 function updatePlayerTime() {
   const current = currentPlaybackTime();
-  const duration = inputMode === "mic_device" ? 0 : audioBuffer?.duration ?? 0;
+  const duration = inputMode === "mic_device" ? 0 : getAudioDuration();
   elements.currentTimeLabel.textContent = formatTime(Math.floor(current));
   elements.durationLabel.textContent = inputMode === "mic_device" ? "live" : formatTime(Math.floor(duration));
   drawOverviewPlayhead(current, duration);
-  if (!audioBuffer || inputMode !== "file") {
+  if (!hasLoadedAudio() || inputMode !== "file") {
     elements.seekSlider.value = "0";
     elements.seekSlider.disabled = true;
     return;
   }
   elements.seekSlider.disabled = false;
   elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
+}
+
+function hasLoadedAudio() {
+  return Boolean(audioElement?.src);
+}
+
+function getAudioDuration() {
+  if (audioElement && Number.isFinite(audioElement.duration)) {
+    return audioElement.duration;
+  }
+  return audioBuffer?.duration ?? 0;
 }
 
 function drawTrackOverview() {
@@ -869,12 +915,14 @@ function drawLiveSpectrum(frequencyData) {
 }
 
 async function seekToSliderValue(value) {
-  if (!audioBuffer || inputMode !== "file") return;
+  if (!hasLoadedAudio() || inputMode !== "file") return;
   const wasPlaying = isPlaying;
-  pausedAt = (Number(value) / 1000) * audioBuffer.duration;
+  pausedAt = (Number(value) / 1000) * getAudioDuration();
+  if (audioElement) {
+    audioElement.currentTime = pausedAt;
+  }
   if (wasPlaying) {
     cancelAnimationFrame(animationFrame);
-    stopSourceNode();
     await playAudio();
   } else {
     updatePlayerTime();
@@ -907,11 +955,11 @@ function setInputMode(mode) {
   elements.audioDevice.disabled = fileMode;
   if (fileMode) {
     stopDeviceInput();
-    setState(audioBuffer ? "Ready" : "Idle");
+    setState(hasLoadedAudio() ? "Ready" : "Idle");
     elements.trackLabel.textContent = loadedFileName || "No track loaded";
     elements.playButton.textContent = "Play";
-    elements.playButton.disabled = !audioBuffer;
-    elements.stopButton.disabled = !audioBuffer;
+    elements.playButton.disabled = !hasLoadedAudio();
+    elements.stopButton.disabled = !hasLoadedAudio();
   } else {
     stopPlayback({ resetPosition: false, keepLights: true });
     setState("Mic ready");
@@ -1021,6 +1069,7 @@ function stopDeviceInput(resetUi = true) {
 
 elements.audioFile.addEventListener("change", (event) => {
   const [file] = event.target.files;
+  event.target.value = "";
   if (file) {
     elements.inputSource.value = "file";
     setInputMode("file");
@@ -1078,7 +1127,7 @@ elements.seekSlider.addEventListener("input", () => {
 });
 
 elements.trackOverview.addEventListener("click", (event) => {
-  if (!audioBuffer || inputMode !== "file") return;
+  if (!hasLoadedAudio() || inputMode !== "file") return;
   const rect = elements.trackOverview.getBoundingClientRect();
   const progress = clamp((event.clientX - rect.left) / rect.width, 0, 1);
   seekToSliderValue(progress * 1000).catch((error) => {

@@ -83,7 +83,8 @@ def build_timeline(
     "energy": energy,
     "differentiation": differentiation,
     "scene_freshness": differentiation,
-    "events": events
+    "events": events,
+    "rhythm_events": build_rhythm_events(analysis, events, bpm),
   }
 
 
@@ -128,3 +129,69 @@ def rhythmic_actions_for_category(sample_category, bpm):
     return base_actions + ["fast_cut_variation"]
 
   return base_actions
+
+
+def build_rhythm_events(analysis, scene_events, bpm):
+  beat_times = analysis.get("beat_times") or []
+  if beat_times:
+    return [
+      make_rhythm_event(float(beat_time), beat_index, scene_events, "analysis_beat")
+      for beat_index, beat_time in enumerate(beat_times)
+    ]
+
+  duration = analysis.get("duration")
+  if not bpm or not duration:
+    return []
+
+  interval = 60 / bpm
+  beat_times = []
+  current = 0.0
+  while current <= duration:
+    beat_times.append(current)
+    current += interval
+  return [
+    make_rhythm_event(float(beat_time), beat_index, scene_events, "tempo_grid")
+    for beat_index, beat_time in enumerate(beat_times)
+  ]
+
+
+def make_rhythm_event(time, beat_index, scene_events, source):
+  scene_event = scene_event_at(time, scene_events)
+  sample_category = scene_event.get("sample_category", "ambient_no_beat")
+  pulse = "downbeat" if beat_index % 4 == 0 else "beat"
+  intensity = rhythm_intensity(sample_category, pulse)
+  return {
+    "time": round(time, 4),
+    "beat_index": beat_index,
+    "pulse": pulse,
+    "source": source,
+    "scene": scene_event.get("scene"),
+    "intent": scene_event.get("intent"),
+    "sample_category": sample_category,
+    "intensity": intensity,
+  }
+
+
+def scene_event_at(time, scene_events):
+  if not scene_events:
+    return {}
+
+  current = scene_events[0]
+  for event in scene_events:
+    if event["time"] > time:
+      break
+    current = event
+  return current
+
+
+def rhythm_intensity(sample_category, pulse):
+  base = {
+    "high_energy_drop": 0.92,
+    "buildup": 0.74,
+    "steady_bass_pulse": 0.62,
+    "breakdown": 0.34,
+    "ambient_no_beat": 0.24,
+  }.get(sample_category, 0.48)
+  if pulse == "downbeat":
+    return round(min(1.0, base * 1.12), 3)
+  return round(base, 3)

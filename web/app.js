@@ -53,10 +53,14 @@ let audioBuffer;
 let loadedFileName = "";
 let loadedTimelineName = "";
 let timelineEvents = [];
+let timelineRhythmEvents = [];
 let timelineDuration = 0;
+let timelineCurrentEvent = null;
+let timelineCurrentRhythmEvent = null;
 let timelinePausedAt = 0;
 let timelineStartedAt = 0;
 let timelineNextIndex = 0;
+let timelineNextRhythmIndex = 0;
 let startedAt = 0;
 let pausedAt = 0;
 let animationFrame;
@@ -207,12 +211,23 @@ async function loadTimelineFile(file) {
     }))
     .filter((event) => Number.isFinite(event.time))
     .sort((left, right) => left.time - right.time);
+  timelineRhythmEvents = (Array.isArray(timeline.rhythm_events) ? timeline.rhythm_events : [])
+    .map((event) => ({
+      ...event,
+      time: Number(event.time ?? 0),
+    }))
+    .filter((event) => Number.isFinite(event.time))
+    .sort((left, right) => left.time - right.time);
 
   const lastEventTime = timelineEvents[timelineEvents.length - 1]?.time ?? 0;
-  timelineDuration = Math.max(Number(timeline.duration ?? 0), lastEventTime + 8);
+  const lastRhythmTime = timelineRhythmEvents[timelineRhythmEvents.length - 1]?.time ?? 0;
+  timelineDuration = Math.max(Number(timeline.duration ?? 0), lastEventTime + 8, lastRhythmTime + 2);
   loadedTimelineName = file.name;
   timelinePausedAt = 0;
   timelineNextIndex = 0;
+  timelineNextRhythmIndex = 0;
+  timelineCurrentEvent = timelineEvents[0] ?? null;
+  timelineCurrentRhythmEvent = null;
   inputMode = "timeline";
   document.body.classList.remove("is-mic-mode");
   elements.inputSource.value = "timeline";
@@ -226,6 +241,9 @@ async function loadTimelineFile(file) {
   drawTimelineOverview();
   updatePlayerTime();
   logEvent(`timeline loaded ${file.name}`);
+  if (!timelineRhythmEvents.length) {
+    logEvent("no rhythm_events: rigenera il JSON con Python");
+  }
 }
 
 function ensureAudioElement() {
@@ -343,6 +361,9 @@ async function playTimeline() {
   }
   timelineStartedAt = audioContext.currentTime - timelinePausedAt;
   timelineNextIndex = findNextTimelineIndex(timelinePausedAt);
+  timelineNextRhythmIndex = findNextTimelineRhythmIndex(timelinePausedAt);
+  timelineCurrentEvent = findTimelineEventAt(timelinePausedAt);
+  timelineCurrentRhythmEvent = findTimelineRhythmEventAt(timelinePausedAt);
   isPlaying = true;
   setState("Timeline playing");
   elements.playButton.textContent = "Pause";
@@ -368,6 +389,9 @@ function stopTimelinePlayback(options = {}) {
     if (resetPosition) {
       timelinePausedAt = 0;
       timelineNextIndex = 0;
+      timelineNextRhythmIndex = 0;
+      timelineCurrentEvent = timelineEvents[0] ?? null;
+      timelineCurrentRhythmEvent = null;
     }
     elements.playButton.textContent = "Play";
     elements.playButton.disabled = !timelineEvents.length;
@@ -387,7 +411,13 @@ function animateTimeline() {
 
   while (timelineNextIndex < timelineEvents.length && timelineEvents[timelineNextIndex].time <= time) {
     triggerTimelineEvent(timelineEvents[timelineNextIndex]);
+    timelineCurrentEvent = timelineEvents[timelineNextIndex];
     timelineNextIndex += 1;
+  }
+  while (timelineNextRhythmIndex < timelineRhythmEvents.length && timelineRhythmEvents[timelineNextRhythmIndex].time <= time) {
+    triggerTimelineRhythmEvent(timelineRhythmEvents[timelineNextRhythmIndex]);
+    timelineCurrentRhythmEvent = timelineRhythmEvents[timelineNextRhythmIndex];
+    timelineNextRhythmIndex += 1;
   }
 
   const energy = getTimelinePreviewEnergy(time);
@@ -780,6 +810,31 @@ function triggerTimelineEvent(event) {
   logEvent(`${formatTime(Math.floor(event.time))} timeline ${category} ${event.scene ?? "scene"}`);
 }
 
+function triggerTimelineRhythmEvent(event) {
+  const profile = genreProfiles[elements.genreProfile.value];
+  const category = event.sample_category ?? event.category ?? categoryFromScene(event.scene);
+  const downbeat = event.pulse === "downbeat";
+  const highEnergy = category === "high_energy_drop";
+  const buildup = category === "buildup";
+  const steady = category === "steady_bass_pulse";
+  const baseEnergy = Number(event.intensity ?? timelineCategoryEnergy(category));
+  const beatEnergy = clamp(baseEnergy * (downbeat ? 1.08 : 0.82), 0.2, 1);
+
+  triggerPattern({
+    profile,
+    time: event.time,
+    energy: beatEnergy,
+    low: steady || highEnergy ? 0.74 : 0.32,
+    mid: buildup || steady ? 0.68 : 0.42,
+    high: highEnergy ? 0.78 : downbeat ? 0.48 : 0.28,
+    dominantBand: highEnergy ? 4 : buildup ? 2 : 1,
+    strong: highEnergy && downbeat,
+    sparse: category === "ambient_no_beat" || category === "breakdown",
+    clockSource: steady ? "bass" : buildup ? "mid_arpeggio" : highEnergy ? "high_pattern" : "none",
+    category,
+  });
+}
+
 function categoryFromScene(scene = "") {
   const normalized = String(scene).toLowerCase();
   if (normalized.includes("drop") || normalized.includes("hook") || normalized.includes("chorus")) return "high_energy_drop";
@@ -798,14 +853,34 @@ function timelineCategoryEnergy(category) {
 }
 
 function getTimelinePreviewEnergy(time) {
-  const previousEvent = timelineEvents
-    .slice(0, timelineNextIndex)
-    .reverse()
-    .find((event) => event.time <= time);
-  if (!previousEvent) return 0;
-  const age = Math.max(0, time - previousEvent.time);
-  const base = timelineCategoryEnergy(previousEvent.sample_category ?? previousEvent.category ?? categoryFromScene(previousEvent.scene));
-  return clamp(base * Math.exp(-age * 0.38), 0, 1);
+  const previousRhythmEvent = findTimelineRhythmEventAt(time);
+  if (previousRhythmEvent) {
+    const age = Math.max(0, time - previousRhythmEvent.time);
+    const base = Number(previousRhythmEvent.intensity ?? timelineCategoryEnergy(previousRhythmEvent.sample_category));
+    return clamp(base * Math.exp(-age * 3.6), 0, 1);
+  }
+  const previousEvent = findTimelineEventAt(time);
+  return previousEvent
+    ? timelineCategoryEnergy(previousEvent.sample_category ?? previousEvent.category ?? categoryFromScene(previousEvent.scene)) * 0.25
+    : 0;
+}
+
+function findTimelineEventAt(time) {
+  let current = timelineEvents[0] ?? null;
+  for (const event of timelineEvents) {
+    if (event.time > time) break;
+    current = event;
+  }
+  return current;
+}
+
+function findTimelineRhythmEventAt(time) {
+  let current = null;
+  for (const event of timelineRhythmEvents) {
+    if (event.time > time) break;
+    current = event;
+  }
+  return current;
 }
 
 function categoryForEnergy(energy) {
@@ -1143,6 +1218,9 @@ async function seekToSliderValue(value) {
     const wasPlaying = isPlaying;
     timelinePausedAt = (Number(value) / 1000) * timelineDuration;
     timelineNextIndex = findNextTimelineIndex(timelinePausedAt);
+    timelineNextRhythmIndex = findNextTimelineRhythmIndex(timelinePausedAt);
+    timelineCurrentEvent = findTimelineEventAt(timelinePausedAt);
+    timelineCurrentRhythmEvent = findTimelineRhythmEventAt(timelinePausedAt);
     if (wasPlaying) {
       await playTimeline();
     } else {
@@ -1167,6 +1245,11 @@ async function seekToSliderValue(value) {
 function findNextTimelineIndex(time) {
   const index = timelineEvents.findIndex((event) => event.time >= time);
   return index === -1 ? timelineEvents.length : index;
+}
+
+function findNextTimelineRhythmIndex(time) {
+  const index = timelineRhythmEvents.findIndex((event) => event.time >= time);
+  return index === -1 ? timelineRhythmEvents.length : index;
 }
 
 async function toggleTransport() {

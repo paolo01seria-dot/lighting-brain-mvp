@@ -67,6 +67,31 @@ class TimelineTest(unittest.TestCase):
     self.assertTrue(timeline["events"][2]["scene_changed"])
     self.assertIn("dimmer_pulse", timeline["events"][0]["rhythmic_actions"])
 
+  def test_timeline_adds_beat_level_rhythm_events_from_analysis(self):
+    analysis = {
+      "path": "track.mp3",
+      "bpm": 120,
+      "beat_times": [0.0, 0.5, 1.0, 1.5, 8.0],
+      "segments": [
+        {"start": 0.0, "end": 8.0, "label": "verse"},
+        {"start": 8.0, "end": 16.0, "label": "chorus"},
+      ],
+    }
+    scene_map = {
+      "name": "base",
+      "default_scene": "fallback",
+      "segment_scenes": {"verse": "pulse_scene", "chorus": "drop_scene"},
+      "bpm_rules": [{"min_bpm": 0, "max_bpm": 999, "energy": "medium"}],
+    }
+
+    timeline = build_timeline(analysis, scene_map)
+
+    self.assertEqual(len(timeline["rhythm_events"]), 5)
+    self.assertEqual(timeline["rhythm_events"][0]["source"], "analysis_beat")
+    self.assertEqual(timeline["rhythm_events"][0]["pulse"], "downbeat")
+    self.assertEqual(timeline["rhythm_events"][1]["pulse"], "beat")
+    self.assertEqual(timeline["rhythm_events"][4]["scene"], "drop_scene")
+
 
 if __name__ == "__main__":
   unittest.main()

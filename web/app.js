@@ -598,7 +598,9 @@ function triggerPattern(context) {
   const count = lights.length;
   if (!count) return;
 
-  const activeIndexes = pickActiveLights(context.profile, context.time, count, context.strong, context.sparse, context.clockSource, context.energy);
+  const activeIndexes = context.gesture
+    ? pickGestureLights(context, count)
+    : pickActiveLights(context.profile, context.time, count, context.strong, context.sparse, context.clockSource, context.energy);
   activeIndexes.forEach((index, order) => {
     const colorIndex = pickColorIndex(context, index, order);
     const clockBoost = context.clockSource && context.clockSource !== "none" ? 0.08 : 0;
@@ -610,6 +612,25 @@ function triggerPattern(context) {
   });
 
   blackoutNonActive(activeIndexes, context.strong ? 0.08 : 0.025);
+}
+
+function pickGestureLights(context, count) {
+  if (count <= 1) return [0];
+  const step = Math.floor(context.time * 2.1 + sceneVariant);
+  if (context.gesture === "accent_flash" || context.gesture === "downbeat_flash") {
+    return symmetricalIndexes(step, count, Math.min(count, 4));
+  }
+  if (context.gesture === "accent_pair" || context.gesture === "symmetrical_pair") {
+    return symmetricalIndexes(step, count, Math.min(count, 2));
+  }
+  if (context.gesture === "buildup_spark") {
+    const pairs = buildSymmetryPairs(count);
+    return pairs[0] ?? symmetricalIndexes(step, count, Math.min(count, 2));
+  }
+  if (context.gesture === "drop_step") {
+    return symmetricalIndexes(step, count, Math.min(count, 3));
+  }
+  return musicalSingleOrPair(step, count, context.sparse);
 }
 
 function pickActiveLights(profile, time, count, strong, sparse = false, clockSource = "none", energy = 0) {
@@ -710,10 +731,14 @@ function uniqueIndexes(values, count) {
 }
 
 function pickColorIndex(context, index, order) {
-  const { profile, time, dominantBand, energy, high, category } = context;
+  const { profile, time, dominantBand, energy, high, category, colorFamily } = context;
   const differentiation = Number(elements.differentiation.value);
   const categoryOffset = category === "high_energy_drop" ? 2 : category === "steady_bass_pulse" ? 1 : 0;
   const phrase = Math.floor(time / 8);
+  if (colorFamily === "white") return 4;
+  if (colorFamily === "hot") return order % 2 === 0 ? 0 : 1;
+  if (colorFamily === "amber") return 1;
+  if (colorFamily === "cool") return order % 2 === 0 ? 3 : 2;
   if (high > 0.62 && order === 0) {
     return 4;
   }
@@ -814,6 +839,7 @@ function triggerTimelineRhythmEvent(event) {
   const profile = genreProfiles[elements.genreProfile.value];
   const category = event.sample_category ?? event.category ?? categoryFromScene(event.scene);
   const downbeat = event.pulse === "downbeat";
+  const accent = event.pulse === "accent";
   const highEnergy = category === "high_energy_drop";
   const buildup = category === "buildup";
   const steady = category === "steady_bass_pulse";
@@ -828,10 +854,13 @@ function triggerTimelineRhythmEvent(event) {
     mid: buildup || steady ? 0.68 : 0.42,
     high: highEnergy ? 0.78 : downbeat ? 0.48 : 0.28,
     dominantBand: highEnergy ? 4 : buildup ? 2 : 1,
-    strong: highEnergy && downbeat,
+    strong: accent || (highEnergy && downbeat),
     sparse: category === "ambient_no_beat" || category === "breakdown",
     clockSource: steady ? "bass" : buildup ? "mid_arpeggio" : highEnergy ? "high_pattern" : "none",
     category,
+    gesture: event.gesture,
+    colorFamily: event.color_family,
+    symmetry: event.symmetry,
   });
 }
 

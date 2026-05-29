@@ -133,11 +133,14 @@ def rhythmic_actions_for_category(sample_category, bpm):
 
 def build_rhythm_events(analysis, scene_events, bpm):
   beat_times = analysis.get("beat_times") or []
+  rhythm_events = []
   if beat_times:
-    return [
+    rhythm_events.extend(
       make_rhythm_event(float(beat_time), beat_index, scene_events, "analysis_beat")
       for beat_index, beat_time in enumerate(beat_times)
-    ]
+    )
+    rhythm_events.extend(build_accent_events(analysis.get("onset_times") or [], scene_events))
+    return sorted(rhythm_events, key=lambda event: (event["time"], event["event_type"]))
 
   duration = analysis.get("duration")
   if not bpm or not duration:
@@ -149,10 +152,12 @@ def build_rhythm_events(analysis, scene_events, bpm):
   while current <= duration:
     beat_times.append(current)
     current += interval
-  return [
+  rhythm_events.extend(
     make_rhythm_event(float(beat_time), beat_index, scene_events, "tempo_grid")
     for beat_index, beat_time in enumerate(beat_times)
-  ]
+  )
+  rhythm_events.extend(build_accent_events(analysis.get("onset_times") or [], scene_events))
+  return sorted(rhythm_events, key=lambda event: (event["time"], event["event_type"]))
 
 
 def make_rhythm_event(time, beat_index, scene_events, source):
@@ -160,8 +165,10 @@ def make_rhythm_event(time, beat_index, scene_events, source):
   sample_category = scene_event.get("sample_category", "ambient_no_beat")
   pulse = "downbeat" if beat_index % 4 == 0 else "beat"
   intensity = rhythm_intensity(sample_category, pulse)
+  gesture = gesture_for_rhythm(sample_category, pulse)
   return {
     "time": round(time, 4),
+    "event_type": "beat",
     "beat_index": beat_index,
     "pulse": pulse,
     "source": source,
@@ -169,7 +176,44 @@ def make_rhythm_event(time, beat_index, scene_events, source):
     "intent": scene_event.get("intent"),
     "sample_category": sample_category,
     "intensity": intensity,
+    "gesture": gesture,
+    "target_group": target_group_for_gesture(gesture),
+    "color_family": color_family_for_gesture(gesture, sample_category),
+    "symmetry": symmetry_for_gesture(gesture),
+    "decay": decay_for_gesture(gesture),
   }
+
+
+def build_accent_events(onset_times, scene_events):
+  accents = []
+  last_time = None
+  for onset_index, onset_time in enumerate(onset_times):
+    onset_time = float(onset_time)
+    if last_time is not None and onset_time - last_time < 0.16:
+      continue
+    scene_event = scene_event_at(onset_time, scene_events)
+    sample_category = scene_event.get("sample_category", "ambient_no_beat")
+    if sample_category in {"ambient_no_beat", "silence_or_pause"}:
+      continue
+    gesture = gesture_for_rhythm(sample_category, "accent")
+    accents.append({
+      "time": round(onset_time, 4),
+      "event_type": "accent",
+      "accent_index": onset_index,
+      "pulse": "accent",
+      "source": "analysis_onset",
+      "scene": scene_event.get("scene"),
+      "intent": scene_event.get("intent"),
+      "sample_category": sample_category,
+      "intensity": rhythm_intensity(sample_category, "accent"),
+      "gesture": gesture,
+      "target_group": target_group_for_gesture(gesture),
+      "color_family": color_family_for_gesture(gesture, sample_category),
+      "symmetry": symmetry_for_gesture(gesture),
+      "decay": decay_for_gesture(gesture),
+    })
+    last_time = onset_time
+  return accents
 
 
 def scene_event_at(time, scene_events):
@@ -194,4 +238,62 @@ def rhythm_intensity(sample_category, pulse):
   }.get(sample_category, 0.48)
   if pulse == "downbeat":
     return round(min(1.0, base * 1.12), 3)
+  if pulse == "accent":
+    return round(min(1.0, base * 1.18), 3)
   return round(base, 3)
+
+
+def gesture_for_rhythm(sample_category, pulse):
+  if pulse == "accent":
+    if sample_category == "high_energy_drop":
+      return "accent_flash"
+    if sample_category == "buildup":
+      return "buildup_spark"
+    return "accent_pair"
+  if pulse == "downbeat":
+    if sample_category == "high_energy_drop":
+      return "downbeat_flash"
+    return "symmetrical_pair"
+  if sample_category == "high_energy_drop":
+    return "drop_step"
+  if sample_category == "buildup":
+    return "ramp_step"
+  return "single_pulse"
+
+
+def target_group_for_gesture(gesture):
+  if gesture in {"accent_flash", "downbeat_flash"}:
+    return "wide_pairs"
+  if gesture in {"accent_pair", "symmetrical_pair"}:
+    return "opposed_pair"
+  if gesture == "buildup_spark":
+    return "upper_pair"
+  return "single"
+
+
+def color_family_for_gesture(gesture, sample_category):
+  if gesture in {"accent_flash", "downbeat_flash"}:
+    return "white"
+  if sample_category == "high_energy_drop":
+    return "hot"
+  if sample_category == "buildup":
+    return "amber"
+  if sample_category == "steady_bass_pulse":
+    return "cool"
+  return "neutral"
+
+
+def symmetry_for_gesture(gesture):
+  if gesture in {"accent_flash", "downbeat_flash"}:
+    return "mirror_burst"
+  if gesture in {"accent_pair", "symmetrical_pair", "buildup_spark"}:
+    return "mirror_pair"
+  return "single"
+
+
+def decay_for_gesture(gesture):
+  if gesture in {"accent_flash", "downbeat_flash"}:
+    return "snap"
+  if gesture == "buildup_spark":
+    return "quick"
+  return "pulse"

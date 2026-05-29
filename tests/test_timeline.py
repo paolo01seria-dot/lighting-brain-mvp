@@ -72,6 +72,7 @@ class TimelineTest(unittest.TestCase):
       "path": "track.mp3",
       "bpm": 120,
       "beat_times": [0.0, 0.5, 1.0, 1.5, 8.0],
+      "onset_times": [0.25, 0.32, 8.25],
       "segments": [
         {"start": 0.0, "end": 8.0, "label": "verse"},
         {"start": 8.0, "end": 16.0, "label": "chorus"},
@@ -86,11 +87,14 @@ class TimelineTest(unittest.TestCase):
 
     timeline = build_timeline(analysis, scene_map)
 
-    self.assertEqual(len(timeline["rhythm_events"]), 5)
+    self.assertEqual(len(timeline["rhythm_events"]), 7)
     self.assertEqual(timeline["rhythm_events"][0]["source"], "analysis_beat")
     self.assertEqual(timeline["rhythm_events"][0]["pulse"], "downbeat")
-    self.assertEqual(timeline["rhythm_events"][1]["pulse"], "beat")
-    self.assertEqual(timeline["rhythm_events"][4]["scene"], "drop_scene")
+    self.assertEqual(timeline["rhythm_events"][1]["source"], "analysis_onset")
+    self.assertEqual(timeline["rhythm_events"][1]["pulse"], "accent")
+    self.assertEqual(timeline["rhythm_events"][1]["gesture"], "accent_pair")
+    self.assertEqual(timeline["rhythm_events"][-1]["scene"], "drop_scene")
+    self.assertIn("symmetry", timeline["rhythm_events"][-1])
 
 
 if __name__ == "__main__":

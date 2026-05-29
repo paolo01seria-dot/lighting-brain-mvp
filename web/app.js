@@ -194,8 +194,8 @@ function positionName(index) {
 
 function positionInfo(index) {
   const position = positions[index] ?? { x: 50, y: 50 };
-  const zone = position.y < 33 ? "up" : position.y < 66 ? "middle" : "down";
-  const side = Math.abs(position.x - 50) < positionNaming.centreDeadbandPercent ? "centre" : position.x < 50 ? "L" : "R";
+  const zone = positionZone(position);
+  const side = positionSide(index, position, zone);
   const slotsPerQuarter = Math.max(1, Math.ceil(positionNaming.totalFixtureSlots / 4));
   const outer =
     side === "L"
@@ -206,8 +206,8 @@ function positionInfo(index) {
   const sameZoneSide = positions
     .map((candidate, candidateIndex) => ({ ...candidate, index: candidateIndex }))
     .filter((candidate) => {
-      const candidateZone = candidate.y < 33 ? "up" : candidate.y < 66 ? "middle" : "down";
-      const candidateSide = Math.abs(candidate.x - 50) < positionNaming.centreDeadbandPercent ? "centre" : candidate.x < 50 ? "L" : "R";
+      const candidateZone = positionZone(candidate);
+      const candidateSide = positionSide(candidate.index, candidate, candidateZone);
       const candidateOuter =
         candidateSide === "L"
           ? candidate.x <= positionNaming.sideInnerPercent
@@ -238,6 +238,37 @@ function positionInfo(index) {
     macro_group: macroGroup,
     slots_per_quarter: slotsPerQuarter,
   };
+}
+
+function positionZone(position) {
+  return position.y < 33 ? "up" : position.y < 66 ? "middle" : "down";
+}
+
+function positionSide(index, position, zone) {
+  if (Math.abs(position.x - 50) >= positionNaming.centreDeadbandPercent) {
+    return position.x < 50 ? "L" : "R";
+  }
+
+  const centreCandidates = positions
+    .map((candidate, candidateIndex) => ({ ...candidate, index: candidateIndex }))
+    .filter((candidate) => {
+      return positionZone(candidate) === zone && Math.abs(candidate.x - 50) < positionNaming.centreDeadbandPercent;
+    })
+    .sort((left, right) => {
+      if (left.x !== right.x) return left.x - right.x;
+      return left.index - right.index;
+    });
+
+  if (centreCandidates.length === 1) {
+    return "centre";
+  }
+
+  const order = centreCandidates.findIndex((candidate) => candidate.index === index);
+  const centreOrder = Math.floor(centreCandidates.length / 2);
+  if (centreCandidates.length % 2 === 1 && order === centreOrder) {
+    return "centre";
+  }
+  return order < centreCandidates.length / 2 ? "L" : "R";
 }
 
 function fromLastLabel(rank) {

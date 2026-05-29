@@ -228,6 +228,22 @@ select {
   accent-color: var(--accent);
 }
 
+.sample-control {
+  min-width: 220px;
+  width: 220px;
+  flex-basis: 220px;
+}
+
+.sample-control input {
+  min-height: 38px;
+  width: 100%;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 button {
   padding: 0 15px;
   cursor: pointer;
@@ -512,6 +528,14 @@ button:disabled {
 
 .light.manual {
   border-color: rgba(255, 255, 255, 0.7);
+}
+
+.light.phase-split::before {
+  inset: 9px;
+  border-radius: 50%;
+  background:
+    linear-gradient(90deg, var(--phase-left, rgba(0, 0, 0, 0.88)) 0 50%, var(--phase-right, rgba(0, 0, 0, 0.88)) 50% 100%);
+  opacity: 0.92;
 }
 
 @media (max-width: 860px) {

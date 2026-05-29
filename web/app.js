@@ -38,6 +38,7 @@ const elements = {
   currentTimeLabel: document.querySelector("#currentTimeLabel"),
   durationLabel: document.querySelector("#durationLabel"),
   trainingMode: document.querySelector("#trainingMode"),
+  sampleTagInput: document.querySelector("#sampleTagInput"),
   currentSampleCategory: document.querySelector("#currentSampleCategory"),
   currentSceneCategory: document.querySelector("#currentSceneCategory"),
   currentIntent: document.querySelector("#currentIntent"),
@@ -127,6 +128,7 @@ function buildLights(count, keepPositions = true) {
     label.textContent = positionName(index);
     light.appendChild(label);
     light.addEventListener("pointerdown", startDrag);
+    light.addEventListener("contextmenu", toggleTrainingLightPhase);
     elements.stage.appendChild(light);
     lights.push(light);
     lightStates.push({
@@ -134,6 +136,8 @@ function buildLights(count, keepPositions = true) {
       age: 999,
       colorIndex: index % colors.length,
       manualColorIndex: null,
+      phaseFirstHalf: true,
+      phaseSecondHalf: true,
     });
   });
 
@@ -834,6 +838,11 @@ function renderLights() {
     const colorIndex = manual ? state.manualColorIndex : state.colorIndex;
     const [r, g, b] = colors[colorIndex].value;
     const visible = intensity > 0.04;
+    const phaseFirst = state.phaseFirstHalf !== false;
+    const phaseSecond = state.phaseSecondHalf !== false;
+    const phaseSplit = manual && (!phaseFirst || !phaseSecond);
+    const phaseColor = `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
+    const phaseOff = "rgba(0, 0, 0, 0.88)";
 
     light.style.background = visible
       ? `radial-gradient(circle at 50% 44%, rgba(255, 255, 255, ${0.18 + intensity * 0.42}) 0 12%, rgba(${r}, ${g}, ${b}, ${0.34 + intensity * 0.58}) 13% 48%, rgba(${r}, ${g}, ${b}, ${0.12 + intensity * 0.22}) 49% 72%, rgba(0, 0, 0, 0.58) 73%)`
@@ -844,8 +853,11 @@ function renderLights() {
       : "";
     light.style.setProperty("--beam", visible ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
     light.style.setProperty("--beam-opacity", visible ? String(intensity * 0.42) : "0");
+    light.style.setProperty("--phase-left", phaseFirst ? phaseColor : phaseOff);
+    light.style.setProperty("--phase-right", phaseSecond ? phaseColor : phaseOff);
     light.classList.toggle("active", intensity > 0.62);
     light.classList.toggle("manual", manual);
+    light.classList.toggle("phase-split", phaseSplit);
   });
 }
 
@@ -1370,6 +1382,31 @@ function cycleTrainingLight(index) {
       ? null
       : state.manualColorIndex + 1;
   state.intensity = state.manualColorIndex === null ? 0 : 1;
+  if (state.manualColorIndex !== null) {
+    state.phaseFirstHalf = state.phaseFirstHalf !== false;
+    state.phaseSecondHalf = state.phaseSecondHalf !== false;
+  }
+  renderLights();
+}
+
+function toggleTrainingLightPhase(event) {
+  if (!isTrainingMode()) return;
+  event.preventDefault();
+  const light = event.currentTarget;
+  const index = Number(light.dataset.index);
+  const state = lightStates[index];
+  if (!state) return;
+  if (state.manualColorIndex === null || state.manualColorIndex === undefined) {
+    state.manualColorIndex = 4;
+    state.intensity = 1;
+  }
+  const rect = light.getBoundingClientRect();
+  const firstHalf = event.clientX < rect.left + rect.width / 2;
+  if (firstHalf) {
+    state.phaseFirstHalf = !state.phaseFirstHalf;
+  } else {
+    state.phaseSecondHalf = !state.phaseSecondHalf;
+  }
   renderLights();
 }
 
@@ -1378,6 +1415,8 @@ function clearTrainingLights() {
     state.manualColorIndex = null;
     state.intensity = 0;
     state.age = 999;
+    state.phaseFirstHalf = true;
+    state.phaseSecondHalf = true;
   });
   renderLights();
 }
@@ -1391,6 +1430,7 @@ function saveTrainingAnnotation() {
     time: roundNumber(time, 4),
     input_mode: inputMode,
     track: loadedTimelineName || loadedFileName || null,
+    sound_sample: normalizeSampleTag(elements.sampleTagInput.value),
     brain: {
       scene: sceneEvent?.scene ?? null,
       sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? null,
@@ -1412,12 +1452,20 @@ function saveTrainingAnnotation() {
           ? "off"
           : colors[state.manualColorIndex].name,
         intensity: state.manualColorIndex === null || state.manualColorIndex === undefined ? 0 : 1,
+        phase: {
+          first_half_on: state.phaseFirstHalf !== false,
+          second_half_on: state.phaseSecondHalf !== false,
+        },
       };
     }),
   };
   trainingAnnotations.push(annotation);
   updateTrainingSummary();
   logEvent(`saved ${annotation.id} ${formatTime(Math.floor(time))}`);
+}
+
+function normalizeSampleTag(value) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "") || null;
 }
 
 function updateTrainingSummary() {
@@ -1738,6 +1786,7 @@ elements.resetLayoutButton.addEventListener("click", () => {
 });
 
 function startDrag(event) {
+  if (event.button !== 0) return;
   const light = event.currentTarget;
   const index = Number(light.dataset.index);
   light.setPointerCapture(event.pointerId);

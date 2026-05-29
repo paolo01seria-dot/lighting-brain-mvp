@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260529-4">
+    <link rel="stylesheet" href="styles.css?v=20260529-5">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -32,6 +32,8 @@
       .transport { display: flex; gap: 8px; width: 132px; flex: 0 0 132px; }
       .training-switch { min-width: 96px; width: 96px; flex-basis: 96px; }
       .training-switch input { width: 22px; height: 22px; accent-color: var(--accent); }
+      .sample-control { min-width: 220px; width: 220px; flex-basis: 220px; }
+      .sample-control input { min-height: 38px; width: 100%; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); }
       button { padding: 0 15px; cursor: pointer; }
       button:disabled { color: #6e777c; cursor: not-allowed; }
       #playButton:not(:disabled) { background: #1f4f47; border-color: #367b70; }
@@ -67,6 +69,7 @@
       .light::after { content: ""; position: absolute; inset: -13px; border-radius: 50%; background: var(--beam, transparent); opacity: var(--beam-opacity, 0); filter: blur(7px); z-index: -1; }
       .light.active { transform: translate(-50%, -50%) scale(1.05); }
       .light.manual { border-color: rgba(255,255,255,.7); }
+      .light.phase-split::before { inset: 9px; border-radius: 50%; background: linear-gradient(90deg, var(--phase-left, rgba(0,0,0,.88)) 0 50%, var(--phase-right, rgba(0,0,0,.88)) 50% 100%); opacity: .92; }
       .light-label { position: absolute; left: 50%; top: calc(100% + 5px); width: 104px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 10px; line-height: 1.1; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
       .is-training .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
       .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .source-mic-panel, .device-control { display: none !important; }
@@ -156,6 +159,20 @@
             <span>Training</span>
             <input id="trainingMode" type="checkbox">
           </label>
+
+          <label class="sample-control">
+            <span>Sound / sample</span>
+            <input id="sampleTagInput" list="sampleTagSuggestions" placeholder="clap_accent">
+            <datalist id="sampleTagSuggestions">
+              <option value="clap_accent"></option>
+              <option value="kick_pulse"></option>
+              <option value="snare_flash"></option>
+              <option value="guitar_arpeggio_clock"></option>
+              <option value="pre_drop_countdown"></option>
+              <option value="fake_drop"></option>
+              <option value="melodic_breakdown"></option>
+            </datalist>
+          </label>
         </div>
 
         <div class="mini-player source-file-panel" aria-label="Audio position">
@@ -222,6 +239,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260529-4"></script>
+    <script src="app.js?v=20260529-5"></script>
   </body>
 </html>

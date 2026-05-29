@@ -17,6 +17,7 @@ const genreProfiles = {
 const elements = {
   inputSource: document.querySelector("#inputSource"),
   audioFile: document.querySelector("#audioFile"),
+  timelineFile: document.querySelector("#timelineFile"),
   audioDevice: document.querySelector("#audioDevice"),
   trackLabel: document.querySelector("#trackLabel"),
   outputTarget: document.querySelector("#outputTarget"),
@@ -50,9 +51,16 @@ let mediaStream;
 let mediaSourceNode;
 let audioBuffer;
 let loadedFileName = "";
+let loadedTimelineName = "";
+let timelineEvents = [];
+let timelineDuration = 0;
+let timelinePausedAt = 0;
+let timelineStartedAt = 0;
+let timelineNextIndex = 0;
 let startedAt = 0;
 let pausedAt = 0;
 let animationFrame;
+let timelineAnimationFrame;
 let isPlaying = false;
 let inputMode = "file";
 let overviewCacheCanvas;
@@ -142,6 +150,7 @@ async function ensureAudioContext() {
 async function loadAudioFile(file) {
   await ensureAudioContext();
   stopDeviceInput();
+  stopTimelinePlayback({ resetPosition: true, keepLights: true });
   stopPlayback({ resetPosition: true });
   if (objectUrl) {
     URL.revokeObjectURL(objectUrl);
@@ -176,6 +185,47 @@ async function loadAudioFile(file) {
     drawTrackOverview();
     logEvent("overview unavailable");
   });
+}
+
+async function loadTimelineFile(file) {
+  stopDeviceInput();
+  stopPlayback({ resetPosition: true, keepLights: true });
+  stopTimelinePlayback({ resetPosition: true, keepLights: true });
+
+  const text = await file.text();
+  const parsed = JSON.parse(text);
+  const timeline = parsed.timeline ?? parsed;
+  const events = Array.isArray(timeline.events) ? timeline.events : [];
+  if (!events.length) {
+    throw new Error("Timeline JSON senza eventi");
+  }
+
+  timelineEvents = events
+    .map((event) => ({
+      ...event,
+      time: Number(event.time ?? event.at ?? 0),
+    }))
+    .filter((event) => Number.isFinite(event.time))
+    .sort((left, right) => left.time - right.time);
+
+  const lastEventTime = timelineEvents[timelineEvents.length - 1]?.time ?? 0;
+  timelineDuration = Math.max(Number(timeline.duration ?? 0), lastEventTime + 8);
+  loadedTimelineName = file.name;
+  timelinePausedAt = 0;
+  timelineNextIndex = 0;
+  inputMode = "timeline";
+  document.body.classList.remove("is-mic-mode");
+  elements.inputSource.value = "timeline";
+  elements.trackLabel.textContent = loadedTimelineName;
+  elements.playButton.textContent = "Play";
+  elements.playButton.disabled = false;
+  elements.stopButton.disabled = false;
+  elements.seekSlider.disabled = false;
+  setState("Timeline ready");
+  updateMeter(0);
+  drawTimelineOverview();
+  updatePlayerTime();
+  logEvent(`timeline loaded ${file.name}`);
 }
 
 function ensureAudioElement() {
@@ -282,6 +332,74 @@ function stopPlayback(options = {}) {
   if (!keepLights) blackoutLights();
   updateMeter(0);
   updatePlayerTime();
+}
+
+async function playTimeline() {
+  if (!timelineEvents.length) return;
+  await ensureAudioContext();
+  cancelAnimationFrame(timelineAnimationFrame);
+  if (timelinePausedAt >= timelineDuration) {
+    timelinePausedAt = 0;
+  }
+  timelineStartedAt = audioContext.currentTime - timelinePausedAt;
+  timelineNextIndex = findNextTimelineIndex(timelinePausedAt);
+  isPlaying = true;
+  setState("Timeline playing");
+  elements.playButton.textContent = "Pause";
+  elements.stopButton.disabled = false;
+  animateTimeline();
+}
+
+function pauseTimeline() {
+  if (!audioContext) return;
+  timelinePausedAt = clamp(audioContext.currentTime - timelineStartedAt, 0, timelineDuration);
+  isPlaying = false;
+  cancelAnimationFrame(timelineAnimationFrame);
+  setState("Timeline paused");
+  elements.playButton.textContent = "Play";
+  updatePlayerTime();
+}
+
+function stopTimelinePlayback(options = {}) {
+  const { resetPosition = true, keepLights = false } = options;
+  cancelAnimationFrame(timelineAnimationFrame);
+  if (inputMode === "timeline") {
+    isPlaying = false;
+    if (resetPosition) {
+      timelinePausedAt = 0;
+      timelineNextIndex = 0;
+    }
+    elements.playButton.textContent = "Play";
+    elements.playButton.disabled = !timelineEvents.length;
+    elements.stopButton.disabled = !timelineEvents.length;
+    setState(timelineEvents.length ? "Timeline ready" : "Idle");
+    updateMeter(0);
+    if (!keepLights) blackoutLights();
+    updatePlayerTime();
+  }
+}
+
+function animateTimeline() {
+  if (!isPlaying || inputMode !== "timeline") return;
+  const time = clamp(audioContext.currentTime - timelineStartedAt, 0, timelineDuration);
+  const profile = genreProfiles[elements.genreProfile.value];
+  decayLightStates(profile.decay);
+
+  while (timelineNextIndex < timelineEvents.length && timelineEvents[timelineNextIndex].time <= time) {
+    triggerTimelineEvent(timelineEvents[timelineNextIndex]);
+    timelineNextIndex += 1;
+  }
+
+  const energy = getTimelinePreviewEnergy(time);
+  updateMeter(energy);
+  renderLights();
+  updatePlayerTime();
+
+  if (time >= timelineDuration) {
+    stopTimelinePlayback({ resetPosition: true });
+    return;
+  }
+  timelineAnimationFrame = requestAnimationFrame(animateTimeline);
 }
 
 function animate() {
@@ -633,6 +751,63 @@ function maybeLogSignal(energy) {
   logEvent(`${formatTime(currentSecond)} ${output} ${genre} ${category} clock:${musicalClock.source}${sceneChanged ? " scene-change" : ""}`);
 }
 
+function triggerTimelineEvent(event) {
+  const profile = genreProfiles[elements.genreProfile.value];
+  const category = event.sample_category ?? event.category ?? categoryFromScene(event.scene);
+  const energy = timelineCategoryEnergy(category);
+  const clockSource = category === "steady_bass_pulse"
+    ? "bass"
+    : category === "buildup"
+      ? "mid_arpeggio"
+      : category === "high_energy_drop"
+        ? "high_pattern"
+        : "none";
+
+  updateCategoryScene(category);
+  triggerPattern({
+    profile,
+    time: event.time,
+    energy,
+    low: category === "steady_bass_pulse" ? 0.82 : energy * 0.38,
+    mid: category === "buildup" || category === "steady_bass_pulse" ? 0.72 : energy * 0.45,
+    high: category === "high_energy_drop" ? 0.86 : energy * 0.34,
+    dominantBand: category === "high_energy_drop" ? 4 : category === "buildup" ? 2 : 1,
+    strong: category === "high_energy_drop",
+    sparse: category === "ambient_no_beat" || category === "breakdown",
+    clockSource,
+    category,
+  });
+  logEvent(`${formatTime(Math.floor(event.time))} timeline ${category} ${event.scene ?? "scene"}`);
+}
+
+function categoryFromScene(scene = "") {
+  const normalized = String(scene).toLowerCase();
+  if (normalized.includes("drop") || normalized.includes("hook") || normalized.includes("chorus")) return "high_energy_drop";
+  if (normalized.includes("buildup") || normalized.includes("lift")) return "buildup";
+  if (normalized.includes("pulse") || normalized.includes("chase") || normalized.includes("groove")) return "steady_bass_pulse";
+  if (normalized.includes("break")) return "breakdown";
+  return "ambient_no_beat";
+}
+
+function timelineCategoryEnergy(category) {
+  if (category === "high_energy_drop") return 0.92;
+  if (category === "buildup") return 0.72;
+  if (category === "steady_bass_pulse") return 0.58;
+  if (category === "breakdown") return 0.34;
+  return 0.24;
+}
+
+function getTimelinePreviewEnergy(time) {
+  const previousEvent = timelineEvents
+    .slice(0, timelineNextIndex)
+    .reverse()
+    .find((event) => event.time <= time);
+  if (!previousEvent) return 0;
+  const age = Math.max(0, time - previousEvent.time);
+  const base = timelineCategoryEnergy(previousEvent.sample_category ?? previousEvent.category ?? categoryFromScene(previousEvent.scene));
+  return clamp(base * Math.exp(-age * 0.38), 0, 1);
+}
+
 function categoryForEnergy(energy) {
   if (energy > 0.68) return "high_energy_drop";
   if (energy > 0.34) return "steady_bass_pulse";
@@ -729,6 +904,11 @@ function formatTime(seconds) {
 }
 
 function currentPlaybackTime() {
+  if (inputMode === "timeline") {
+    return isPlaying && audioContext
+      ? clamp(audioContext.currentTime - timelineStartedAt, 0, timelineDuration)
+      : clamp(timelinePausedAt, 0, timelineDuration);
+  }
   if (inputMode === "mic_device") {
     return audioContext && isPlaying ? Math.max(0, audioContext.currentTime - startedAt) : 0;
   }
@@ -745,6 +925,11 @@ function updatePlayerTime() {
   elements.currentTimeLabel.textContent = formatTime(Math.floor(current));
   elements.durationLabel.textContent = inputMode === "mic_device" ? "live" : formatTime(Math.floor(duration));
   drawOverviewPlayhead(current, duration);
+  if (inputMode === "timeline") {
+    elements.seekSlider.disabled = !timelineEvents.length;
+    elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
+    return;
+  }
   if (!hasLoadedAudio() || inputMode !== "file") {
     elements.seekSlider.value = "0";
     elements.seekSlider.disabled = true;
@@ -759,6 +944,9 @@ function hasLoadedAudio() {
 }
 
 function getAudioDuration() {
+  if (inputMode === "timeline") {
+    return timelineDuration;
+  }
   if (audioElement && Number.isFinite(audioElement.duration)) {
     return audioElement.duration;
   }
@@ -836,6 +1024,38 @@ function drawTrackOverview() {
   context.drawImage(overviewCacheCanvas, 0, 0);
 }
 
+function drawTimelineOverview() {
+  const canvas = elements.trackOverview;
+  const context = canvas.getContext("2d");
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(260, Math.round(rect.width * ratio));
+  const height = Math.max(120, Math.round(rect.height * ratio));
+  canvas.width = width;
+  canvas.height = height;
+  context.fillStyle = "#0d1011";
+  context.fillRect(0, 0, width, height);
+  drawOverviewGrid(context, width, height);
+
+  timelineEvents.forEach((event) => {
+    const category = event.sample_category ?? event.category ?? categoryFromScene(event.scene);
+    const energy = timelineCategoryEnergy(category);
+    const x = Math.round((event.time / Math.max(timelineDuration, 0.001)) * width);
+    const markerHeight = Math.max(12, energy * height * 0.84);
+    const [r, g, b] = colors[colorIndexForTimelineCategory(category)].value;
+    context.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.28 + energy * 0.62})`;
+    context.fillRect(Math.max(0, x - 2 * ratio), height - markerHeight, Math.max(2, 4 * ratio), markerHeight);
+  });
+}
+
+function colorIndexForTimelineCategory(category) {
+  if (category === "high_energy_drop") return 4;
+  if (category === "buildup") return 1;
+  if (category === "steady_bass_pulse") return 3;
+  if (category === "breakdown") return 2;
+  return 0;
+}
+
 function drawOverviewGrid(context, width, height) {
   context.strokeStyle = "rgba(255, 255, 255, 0.06)";
   context.lineWidth = 1;
@@ -849,6 +1069,20 @@ function drawOverviewGrid(context, width, height) {
 }
 
 function drawOverviewPlayhead(current, duration) {
+  if (inputMode === "timeline") {
+    drawTimelineOverview();
+    const canvas = elements.trackOverview;
+    const context = canvas.getContext("2d");
+    const progress = clamp(current / Math.max(duration, 0.001), 0, 1);
+    const x = Math.round(progress * canvas.width);
+    context.strokeStyle = "rgba(255, 255, 255, 0.92)";
+    context.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, canvas.height);
+    context.stroke();
+    return;
+  }
   if (!audioBuffer || inputMode !== "file") return;
   drawTrackOverview();
   const canvas = elements.trackOverview;
@@ -905,6 +1139,17 @@ function drawLiveSpectrum(frequencyData) {
 }
 
 async function seekToSliderValue(value) {
+  if (inputMode === "timeline") {
+    const wasPlaying = isPlaying;
+    timelinePausedAt = (Number(value) / 1000) * timelineDuration;
+    timelineNextIndex = findNextTimelineIndex(timelinePausedAt);
+    if (wasPlaying) {
+      await playTimeline();
+    } else {
+      updatePlayerTime();
+    }
+    return;
+  }
   if (!hasLoadedAudio() || inputMode !== "file") return;
   const wasPlaying = isPlaying;
   pausedAt = (Number(value) / 1000) * getAudioDuration();
@@ -919,7 +1164,20 @@ async function seekToSliderValue(value) {
   }
 }
 
+function findNextTimelineIndex(time) {
+  const index = timelineEvents.findIndex((event) => event.time >= time);
+  return index === -1 ? timelineEvents.length : index;
+}
+
 async function toggleTransport() {
+  if (inputMode === "timeline") {
+    if (isPlaying) {
+      pauseTimeline();
+    } else {
+      await playTimeline();
+    }
+    return;
+  }
   if (inputMode === "mic_device") {
     if (isPlaying) {
       stopDeviceInput();
@@ -937,12 +1195,16 @@ async function toggleTransport() {
 }
 
 function setInputMode(mode) {
+  if (inputMode === "timeline" && mode !== "timeline") {
+    stopTimelinePlayback({ resetPosition: false, keepLights: true });
+  }
   inputMode = mode;
   const fileMode = mode === "file";
+  const timelineMode = mode === "timeline";
   document.body.classList.toggle("is-mic-mode", mode === "mic_device");
   elements.audioFile.disabled = !fileMode;
   elements.audioFile.closest(".file-control").classList.toggle("disabled", !fileMode);
-  elements.audioDevice.disabled = fileMode;
+  elements.audioDevice.disabled = mode !== "mic_device";
   if (fileMode) {
     stopDeviceInput();
     setState(hasLoadedAudio() ? "Ready" : "Idle");
@@ -950,6 +1212,17 @@ function setInputMode(mode) {
     elements.playButton.textContent = "Play";
     elements.playButton.disabled = !hasLoadedAudio();
     elements.stopButton.disabled = !hasLoadedAudio();
+  } else if (timelineMode) {
+    stopDeviceInput();
+    stopPlayback({ resetPosition: false, keepLights: true });
+    setState(timelineEvents.length ? "Timeline ready" : "Load timeline");
+    elements.trackLabel.textContent = loadedTimelineName || "No timeline loaded";
+    elements.playButton.textContent = "Play";
+    elements.playButton.disabled = !timelineEvents.length;
+    elements.stopButton.disabled = !timelineEvents.length;
+    if (timelineEvents.length) {
+      drawTimelineOverview();
+    }
   } else {
     stopPlayback({ resetPosition: false, keepLights: true });
     setState("Mic ready");
@@ -1070,6 +1343,17 @@ elements.audioFile.addEventListener("change", (event) => {
   }
 });
 
+elements.timelineFile.addEventListener("change", (event) => {
+  const [file] = event.target.files;
+  event.target.value = "";
+  if (file) {
+    loadTimelineFile(file).catch((error) => {
+      setState("Timeline error");
+      logEvent(error.message);
+    });
+  }
+});
+
 elements.playButton.addEventListener("click", () => {
   toggleTransport().catch((error) => {
     const micDenied = inputMode === "mic_device" && /permission|denied|notallowed/i.test(error.message);
@@ -1087,6 +1371,8 @@ elements.stopButton.addEventListener("click", () => {
   if (inputMode === "mic_device") {
     stopDeviceInput();
     blackoutLights();
+  } else if (inputMode === "timeline") {
+    stopTimelinePlayback({ resetPosition: true });
   } else {
     stopPlayback({ resetPosition: true });
   }
@@ -1117,7 +1403,7 @@ elements.seekSlider.addEventListener("input", () => {
 });
 
 elements.trackOverview.addEventListener("click", (event) => {
-  if (!hasLoadedAudio() || inputMode !== "file") return;
+  if ((!hasLoadedAudio() || inputMode !== "file") && inputMode !== "timeline") return;
   const rect = elements.trackOverview.getBoundingClientRect();
   const progress = clamp((event.clientX - rect.left) / rect.width, 0, 1);
   seekToSliderValue(progress * 1000).catch((error) => {

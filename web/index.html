@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260528-2">
+    <link rel="stylesheet" href="styles.css?v=20260529-1">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -77,6 +77,7 @@
             <span>Input</span>
             <select id="inputSource">
               <option value="file">Load file</option>
+              <option value="timeline">Timeline JSON</option>
               <option value="mic_device">Mic Device</option>
               <option value="system_audio" disabled>System Audio</option>
               <option value="rekordbox" disabled>Rekordbox</option>
@@ -87,6 +88,11 @@
           <label class="file-control source-file-control">
             <span>Load audio</span>
             <input id="audioFile" type="file" accept="audio/*">
+          </label>
+
+          <label class="file-control">
+            <span>Load timeline</span>
+            <input id="timelineFile" type="file" accept="application/json,.json">
           </label>
 
           <label class="device-control">
@@ -181,6 +187,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260528-2"></script>
+    <script src="app.js?v=20260529-1"></script>
   </body>
 </html>

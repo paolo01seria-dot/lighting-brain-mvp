@@ -39,9 +39,9 @@ select {
 .topbar {
   display: grid;
   grid-template-columns: minmax(220px, 300px) 1fr;
-  align-items: center;
-  gap: 24px;
-  padding: 18px 22px;
+  align-items: start;
+  gap: 16px;
+  padding: 14px 20px 12px;
   border-bottom: 1px solid var(--line);
   background: #15181a;
 }
@@ -77,8 +77,8 @@ p {
 .controls {
   display: flex;
   align-items: end;
-  justify-content: flex-end;
-  gap: 12px;
+  justify-content: flex-start;
+  gap: 10px;
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -89,6 +89,7 @@ p {
   grid-template-columns: 44px minmax(180px, 1fr) 44px;
   align-items: center;
   gap: 10px;
+  margin-top: 4px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
@@ -452,8 +453,10 @@ button:disabled {
 
 .light {
   position: absolute;
+  display: block;
   width: 54px;
   height: 54px;
+  padding: 0;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background:
@@ -465,6 +468,7 @@ button:disabled {
     inset 0 -13px 22px rgba(0, 0, 0, 0.58),
     0 5px 17px rgba(0, 0, 0, 0.46);
   cursor: grab;
+  appearance: none;
   touch-action: none;
   transform: translate(-50%, -50%) scale(0.96);
   transition: background 90ms linear, box-shadow 90ms linear, opacity 90ms linear, transform 90ms linear;
@@ -530,12 +534,64 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.7);
 }
 
+.light.blackout {
+  border-color: rgba(255, 255, 255, 0.16);
+  background:
+    radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.12) 0 8%, rgba(255, 255, 255, 0.03) 9% 28%, rgba(0, 0, 0, 0.6) 29% 64%, rgba(0, 0, 0, 0.92) 65%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.11), rgba(0, 0, 0, 0.95) 48%, rgba(255, 255, 255, 0.05));
+  box-shadow:
+    inset 0 2px 10px rgba(255, 255, 255, 0.12),
+    inset 0 -13px 22px rgba(0, 0, 0, 0.72),
+    0 5px 17px rgba(0, 0, 0, 0.46) !important;
+}
+
 .light.phase-split::before {
-  inset: 9px;
+  inset: 10px;
   border-radius: 50%;
   background:
     linear-gradient(90deg, var(--phase-left, rgba(0, 0, 0, 0.88)) 0 50%, var(--phase-right, rgba(0, 0, 0, 0.88)) 50% 100%);
-  opacity: 0.92;
+  opacity: 1;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 0 12px rgba(0, 0, 0, 0.5);
+}
+
+.phase-button {
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.36);
+  background:
+    radial-gradient(circle at 36% 28%, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.05) 42%, rgba(79, 195, 177, 0.62) 74%),
+    #1d2a2c;
+  box-shadow:
+    inset 0 1px 4px rgba(255, 255, 255, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.46);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.phase-button-first {
+  left: -8px;
+}
+
+.phase-button-second {
+  right: -8px;
+}
+
+.phase-button.is-off {
+  border-color: rgba(255, 255, 255, 0.18);
+  background:
+    radial-gradient(circle at 38% 28%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.02) 40%, rgba(0, 0, 0, 0.92) 76%),
+    #030505;
+  box-shadow:
+    inset 0 1px 5px rgba(255, 255, 255, 0.08),
+    0 1px 5px rgba(0, 0, 0, 0.54);
 }
 
 @media (max-width: 860px) {

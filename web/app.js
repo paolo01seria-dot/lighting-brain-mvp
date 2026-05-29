@@ -6,6 +6,16 @@ const colors = [
   { name: "white", value: [245, 247, 248] },
 ];
 
+const trainingColors = [
+  { name: "red", value: [255, 76, 91] },
+  { name: "green", value: [88, 221, 130] },
+  { name: "blue", value: [88, 123, 255] },
+  { name: "yellow", value: [255, 220, 88] },
+  { name: "purple", value: [174, 96, 255] },
+  { name: "casual", value: null },
+  { name: "blackout", value: [0, 0, 0], blackout: true },
+];
+
 const genreProfiles = {
   house: { smoothing: 0.48, pulse: 1.28, palette: [1, 2, 3, 4], motion: "bounce", chase: 1.0, threshold: 0.062, decay: 0.78, spread: 2 },
   techno: { smoothing: 0.54, pulse: 1.34, palette: [3, 4, 0], motion: "scan", chase: 1.4, threshold: 0.058, decay: 0.82, spread: 2 },
@@ -116,8 +126,9 @@ function buildLights(count, keepPositions = true) {
   lightStates = [];
 
   positions.forEach((position, index) => {
-    const light = document.createElement("button");
-    light.type = "button";
+    const light = document.createElement("div");
+    light.setAttribute("role", "button");
+    light.tabIndex = 0;
     light.className = "light";
     light.dataset.index = String(index);
     light.title = positionName(index);
@@ -127,8 +138,19 @@ function buildLights(count, keepPositions = true) {
     label.className = "light-label";
     label.textContent = positionName(index);
     light.appendChild(label);
+    ["first", "second"].forEach((phase) => {
+      const phaseButton = document.createElement("button");
+      phaseButton.type = "button";
+      phaseButton.className = `phase-button phase-button-${phase}`;
+      phaseButton.dataset.phase = phase;
+      phaseButton.title = phase === "first" ? "Prima meta BPM" : "Seconda meta BPM";
+      phaseButton.addEventListener("pointerdown", stopPhaseButtonEvent);
+      phaseButton.addEventListener("click", toggleTrainingLightPhase);
+      phaseButton.addEventListener("contextmenu", stopPhaseButtonEvent);
+      light.appendChild(phaseButton);
+    });
     light.addEventListener("pointerdown", startDrag);
-    light.addEventListener("contextmenu", toggleTrainingLightPhase);
+    light.addEventListener("contextmenu", cycleTrainingLightBackward);
     elements.stage.appendChild(light);
     lights.push(light);
     lightStates.push({
@@ -136,6 +158,7 @@ function buildLights(count, keepPositions = true) {
       age: 999,
       colorIndex: index % colors.length,
       manualColorIndex: null,
+      manualRandomColor: null,
       phaseFirstHalf: true,
       phaseSecondHalf: true,
     });
@@ -356,6 +379,9 @@ function pauseAudio() {
   cancelAnimationFrame(animationFrame);
   setState("Paused");
   elements.playButton.textContent = "Play";
+  if (isTrainingMode()) {
+    blackoutAutoLights();
+  }
   updatePlayerTime();
 }
 
@@ -439,6 +465,9 @@ function pauseTimeline() {
   cancelAnimationFrame(timelineAnimationFrame);
   setState("Timeline paused");
   elements.playButton.textContent = "Play";
+  if (isTrainingMode()) {
+    blackoutAutoLights();
+  }
   updatePlayerTime();
 }
 
@@ -825,39 +854,106 @@ function blackoutLights() {
     state.age = 999;
     if (!isTrainingMode()) {
       state.manualColorIndex = null;
+      state.manualRandomColor = null;
     }
   });
   renderLights();
+}
+
+function blackoutAutoLights() {
+  lightStates.forEach((state) => {
+    if (state.manualColorIndex === null || state.manualColorIndex === undefined) {
+      state.intensity = 0;
+      state.age = 999;
+    }
+  });
+  renderLights();
+}
+
+function randomTrainingColor() {
+  const hue = Math.floor(Math.random() * 360);
+  const saturation = 78 + Math.floor(Math.random() * 18);
+  const lightness = 54 + Math.floor(Math.random() * 14);
+  return hslToRgb(hue, saturation, lightness);
+}
+
+function hslToRgb(hue, saturation, lightness) {
+  const s = saturation / 100;
+  const l = lightness / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+  const m = l - c / 2;
+  const [rp, gp, bp] = hue < 60
+    ? [c, x, 0]
+    : hue < 120
+      ? [x, c, 0]
+      : hue < 180
+        ? [0, c, x]
+        : hue < 240
+          ? [0, x, c]
+          : hue < 300
+            ? [x, 0, c]
+            : [c, 0, x];
+  return [
+    Math.round((rp + m) * 255),
+    Math.round((gp + m) * 255),
+    Math.round((bp + m) * 255),
+  ];
+}
+
+function manualLightColor(state) {
+  if (state.manualColorIndex === null || state.manualColorIndex === undefined) return null;
+  const color = trainingColors[state.manualColorIndex];
+  if (!color) return null;
+  if (color.name === "casual") {
+    if (!state.manualRandomColor) {
+      state.manualRandomColor = randomTrainingColor();
+    }
+    return { ...color, value: state.manualRandomColor };
+  }
+  return color;
 }
 
 function renderLights() {
   lights.forEach((light, index) => {
     const state = lightStates[index] ?? { intensity: 0, colorIndex: index % colors.length };
     const manual = state.manualColorIndex !== null && state.manualColorIndex !== undefined;
-    const intensity = manual ? 1 : clamp(state.intensity, 0, 1);
-    const colorIndex = manual ? state.manualColorIndex : state.colorIndex;
-    const [r, g, b] = colors[colorIndex].value;
-    const visible = intensity > 0.04;
+    const manualColor = manualLightColor(state);
+    const color = manualColor ?? colors[state.colorIndex];
+    const [r, g, b] = color.value;
     const phaseFirst = state.phaseFirstHalf !== false;
     const phaseSecond = state.phaseSecondHalf !== false;
+    const activePhaseCount = (phaseFirst ? 1 : 0) + (phaseSecond ? 1 : 0);
+    const manualBlackout = Boolean(manual && (manualColor?.blackout || activePhaseCount === 0));
+    const intensity = manual ? (manualBlackout ? 0 : 1) : clamp(state.intensity, 0, 1);
+    const visible = intensity > 0.04;
     const phaseSplit = manual && (!phaseFirst || !phaseSecond);
     const phaseColor = `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
-    const phaseOff = "rgba(0, 0, 0, 0.88)";
+    const phaseOff = "rgba(0, 0, 0, 0.96)";
+    const partialPhase = manual && activePhaseCount === 1;
+    const showGlow = visible && !partialPhase && !manualBlackout;
+    const leftPhaseButton = light.querySelector('[data-phase="first"]');
+    const rightPhaseButton = light.querySelector('[data-phase="second"]');
 
     light.style.background = visible
-      ? `radial-gradient(circle at 50% 44%, rgba(255, 255, 255, ${0.18 + intensity * 0.42}) 0 12%, rgba(${r}, ${g}, ${b}, ${0.34 + intensity * 0.58}) 13% 48%, rgba(${r}, ${g}, ${b}, ${0.12 + intensity * 0.22}) 49% 72%, rgba(0, 0, 0, 0.58) 73%)`
+      ? phaseSplit
+        ? "radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.18) 0 10%, rgba(255, 255, 255, 0.06) 11% 29%, rgba(0, 0, 0, 0.42) 30% 64%, rgba(0, 0, 0, 0.82) 65%), linear-gradient(145deg, rgba(255, 255, 255, 0.13), rgba(4, 6, 7, 0.9) 48%, rgba(255, 255, 255, 0.07))"
+        : `radial-gradient(circle at 50% 44%, rgba(255, 255, 255, ${0.18 + intensity * 0.42}) 0 12%, rgba(${r}, ${g}, ${b}, ${0.34 + intensity * 0.58}) 13% 48%, rgba(${r}, ${g}, ${b}, ${0.12 + intensity * 0.22}) 49% 72%, rgba(0, 0, 0, 0.58) 73%)`
       : "";
     light.style.opacity = visible ? (0.24 + intensity * 0.76).toFixed(3) : "0.82";
-    light.style.boxShadow = visible
+    light.style.boxShadow = showGlow
       ? `0 0 ${Math.round(10 + intensity * 54)}px rgba(${r}, ${g}, ${b}, ${intensity * 0.84})`
       : "";
-    light.style.setProperty("--beam", visible ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
-    light.style.setProperty("--beam-opacity", visible ? String(intensity * 0.42) : "0");
+    light.style.setProperty("--beam", showGlow ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
+    light.style.setProperty("--beam-opacity", showGlow ? String(intensity * 0.42) : "0");
     light.style.setProperty("--phase-left", phaseFirst ? phaseColor : phaseOff);
     light.style.setProperty("--phase-right", phaseSecond ? phaseColor : phaseOff);
     light.classList.toggle("active", intensity > 0.62);
     light.classList.toggle("manual", manual);
     light.classList.toggle("phase-split", phaseSplit);
+    light.classList.toggle("blackout", manualBlackout);
+    leftPhaseButton?.classList.toggle("is-off", !phaseFirst || manualBlackout);
+    rightPhaseButton?.classList.toggle("is-off", !phaseSecond || manualBlackout);
   });
 }
 
@@ -1372,47 +1468,67 @@ function isTrainingMode() {
   return Boolean(elements.trainingMode?.checked);
 }
 
-function cycleTrainingLight(index) {
+function cycleTrainingLight(index, direction = 1) {
   if (!isTrainingMode()) return;
   const state = lightStates[index];
   if (!state) return;
-  state.manualColorIndex = state.manualColorIndex === null || state.manualColorIndex === undefined
-    ? 0
-    : state.manualColorIndex >= colors.length - 1
-      ? null
-      : state.manualColorIndex + 1;
-  state.intensity = state.manualColorIndex === null ? 0 : 1;
-  if (state.manualColorIndex !== null) {
-    state.phaseFirstHalf = state.phaseFirstHalf !== false;
-    state.phaseSecondHalf = state.phaseSecondHalf !== false;
+  const currentIndex = state.manualColorIndex === null || state.manualColorIndex === undefined
+    ? (direction > 0 ? -1 : 0)
+    : state.manualColorIndex;
+  const nextIndex = (currentIndex + direction + trainingColors.length) % trainingColors.length;
+  state.manualColorIndex = nextIndex;
+  state.manualRandomColor = trainingColors[nextIndex].name === "casual" ? randomTrainingColor() : null;
+  state.intensity = trainingColors[nextIndex].blackout ? 0 : 1;
+  if (state.phaseFirstHalf === false && state.phaseSecondHalf === false && !trainingColors[nextIndex].blackout) {
+    state.phaseFirstHalf = true;
+    state.phaseSecondHalf = true;
   }
   renderLights();
+}
+
+function cycleTrainingLightBackward(event) {
+  if (!isTrainingMode()) return;
+  if (event.target.closest(".phase-button")) return;
+  event.preventDefault();
+  const index = Number(event.currentTarget.dataset.index);
+  cycleTrainingLight(index, -1);
+}
+
+function stopPhaseButtonEvent(event) {
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function toggleTrainingLightPhase(event) {
   if (!isTrainingMode()) return;
   event.preventDefault();
-  const light = event.currentTarget;
+  event.stopPropagation();
+  const phaseButton = event.currentTarget;
+  const light = phaseButton.closest(".light");
   const index = Number(light.dataset.index);
   const state = lightStates[index];
   if (!state) return;
   if (state.manualColorIndex === null || state.manualColorIndex === undefined) {
-    state.manualColorIndex = 4;
+    state.manualColorIndex = 0;
     state.intensity = 1;
   }
-  const rect = light.getBoundingClientRect();
-  const firstHalf = event.clientX < rect.left + rect.width / 2;
-  if (firstHalf) {
+  if (trainingColors[state.manualColorIndex]?.blackout) {
+    state.manualColorIndex = 0;
+    state.intensity = 1;
+  }
+  if (phaseButton.dataset.phase === "first") {
     state.phaseFirstHalf = !state.phaseFirstHalf;
   } else {
     state.phaseSecondHalf = !state.phaseSecondHalf;
   }
+  state.intensity = state.phaseFirstHalf || state.phaseSecondHalf ? 1 : 0;
   renderLights();
 }
 
 function clearTrainingLights() {
   lightStates.forEach((state) => {
     state.manualColorIndex = null;
+    state.manualRandomColor = null;
     state.intensity = 0;
     state.age = 999;
     state.phaseFirstHalf = true;
@@ -1440,6 +1556,8 @@ function saveTrainingAnnotation() {
     },
     desired_lights: lightStates.map((state, index) => {
       const info = positionInfo(index);
+      const color = manualLightColor(state);
+      const isBlackout = Boolean(color?.blackout || (state.phaseFirstHalf === false && state.phaseSecondHalf === false));
       return {
         index,
         position_name: positionName(index),
@@ -1448,10 +1566,9 @@ function saveTrainingAnnotation() {
         rank: info.rank,
         x: roundNumber(positions[index]?.x ?? 0, 2),
         y: roundNumber(positions[index]?.y ?? 0, 2),
-        color: state.manualColorIndex === null || state.manualColorIndex === undefined
-          ? "off"
-          : colors[state.manualColorIndex].name,
-        intensity: state.manualColorIndex === null || state.manualColorIndex === undefined ? 0 : 1,
+        color: color?.name ?? "off",
+        rgb: color?.value ?? [0, 0, 0],
+        intensity: color && !isBlackout ? 1 : 0,
         phase: {
           first_half_on: state.phaseFirstHalf !== false,
           second_half_on: state.phaseSecondHalf !== false,
@@ -1787,6 +1904,7 @@ elements.resetLayoutButton.addEventListener("click", () => {
 
 function startDrag(event) {
   if (event.button !== 0) return;
+  if (event.target.closest(".phase-button")) return;
   const light = event.currentTarget;
   const index = Number(light.dataset.index);
   light.setPointerCapture(event.pointerId);

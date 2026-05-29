@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260529-7">
+    <link rel="stylesheet" href="styles.css?v=20260529-8">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -16,7 +16,7 @@
       .brand-mark { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #ff4f62 0 25%, #ffc857 25% 50%, #30c5ff 50% 75%, #f5f7f8 75%); }
       h1 { margin: 0; font-size: 18px; font-weight: 720; }
       p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
-      .controls { display: flex; align-items: end; justify-content: flex-start; gap: 10px; flex-wrap: wrap; min-width: 0; }
+      .controls { display: flex; align-items: end; justify-content: flex-start; gap: 10px; flex-wrap: nowrap; min-width: 0; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
       label, .file-control { display: grid; gap: 6px; min-width: 150px; width: 150px; flex: 0 0 150px; }
       label span, .file-control span { color: var(--muted); font-size: 12px; }
       select, .number-control input, .file-control, button { min-height: 38px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); }
@@ -79,7 +79,7 @@
       .is-training .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
       .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .source-mic-panel, .device-control { display: none !important; }
       .is-mic-mode .source-mic-panel, .is-mic-mode .device-control { display: block !important; }
-      @media (max-width: 860px) { .topbar, .tester-layout { display: block; } .controls { justify-content: stretch; margin-top: 18px; } label, .file-control { flex: 1 1 190px; width: auto; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; } }
+      @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 0 0 180px; width: 180px; } .transport { flex: 0 0 132px; } .training-switch { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; } }
     </style>
   </head>
   <body>

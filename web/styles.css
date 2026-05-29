@@ -79,8 +79,11 @@ p {
   align-items: end;
   justify-content: flex-start;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
 }
 
 .mini-player {
@@ -598,6 +601,8 @@ button:disabled {
   .topbar {
     display: grid;
     grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 12px 14px 10px;
   }
 
   .tester-layout {
@@ -605,14 +610,26 @@ button:disabled {
   }
 
   .controls {
-    justify-content: stretch;
-    margin-top: 18px;
+    justify-content: flex-start;
+    margin-top: 0;
   }
 
   label,
   .file-control {
-    flex: 1 1 190px;
-    width: auto;
+    flex: 0 0 180px;
+    width: 180px;
+  }
+
+  .transport {
+    flex: 0 0 132px;
+  }
+
+  .training-switch {
+    flex: 0 0 92px;
+  }
+
+  .mini-player {
+    margin-top: 0;
   }
 
   .meter-panel {

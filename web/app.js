@@ -16,6 +16,13 @@ const trainingColors = [
   { name: "blackout", value: [0, 0, 0], blackout: true },
 ];
 
+const positionNaming = {
+  centreDeadbandPercent: 4,
+  outerLeftPercent: 25,
+  outerRightPercent: 75,
+  maxFixturesPerSide: 8,
+};
+
 const genreProfiles = {
   house: { smoothing: 0.48, pulse: 1.28, palette: [1, 2, 3, 4], motion: "bounce", chase: 1.0, threshold: 0.062, decay: 0.78, spread: 2 },
   techno: { smoothing: 0.54, pulse: 1.34, palette: [3, 4, 0], motion: "scan", chase: 1.4, threshold: 0.058, decay: 0.82, spread: 2 },
@@ -180,33 +187,57 @@ function refreshLightPositionLabels() {
 
 function positionName(index) {
   const info = positionInfo(index);
-  if (info.side === "centro") {
-    return `${info.zone} centro`;
+  if (info.side === "centre") {
+    return `${info.zone}-centre`;
   }
-  return `${info.zone} ${ordinal(info.rank)} ${info.side}`;
+  return `${info.zone}-${info.side}-${info.position}`;
 }
 
 function positionInfo(index) {
   const position = positions[index] ?? { x: 50, y: 50 };
-  const zone = position.y < 33 ? "alto" : position.y < 66 ? "medio" : "basso";
-  const side = Math.abs(position.x - 50) < 4 ? "centro" : position.x < 50 ? "sinistra" : "destra";
+  const zone = position.y < 33 ? "up" : position.y < 66 ? "middle" : "down";
+  const side = Math.abs(position.x - 50) < positionNaming.centreDeadbandPercent ? "centre" : position.x < 50 ? "L" : "R";
+  const outer =
+    side === "L"
+      ? position.x <= positionNaming.outerLeftPercent
+      : side === "R"
+        ? position.x >= positionNaming.outerRightPercent
+        : false;
   const sameZoneSide = positions
     .map((candidate, candidateIndex) => ({ ...candidate, index: candidateIndex }))
     .filter((candidate) => {
-      const candidateZone = candidate.y < 33 ? "alto" : candidate.y < 66 ? "medio" : "basso";
-      const candidateSide = Math.abs(candidate.x - 50) < 4 ? "centro" : candidate.x < 50 ? "sinistra" : "destra";
-      return candidateZone === zone && candidateSide === side;
+      const candidateZone = candidate.y < 33 ? "up" : candidate.y < 66 ? "middle" : "down";
+      const candidateSide = Math.abs(candidate.x - 50) < positionNaming.centreDeadbandPercent ? "centre" : candidate.x < 50 ? "L" : "R";
+      const candidateOuter =
+        candidateSide === "L"
+          ? candidate.x <= positionNaming.outerLeftPercent
+          : candidateSide === "R"
+            ? candidate.x >= positionNaming.outerRightPercent
+            : false;
+      return candidateZone === zone && candidateSide === side && candidateOuter === outer;
     })
-    .sort((left, right) => Math.abs(left.x - 50) - Math.abs(right.x - 50));
+    .sort((left, right) => {
+      if (side === "centre") return left.y - right.y;
+      if (!outer) return Math.abs(left.x - 50) - Math.abs(right.x - 50);
+      return side === "L" ? left.x - right.x : right.x - left.x;
+    });
+  const rank = clamp(
+    Math.max(1, sameZoneSide.findIndex((candidate) => candidate.index === index) + 1),
+    1,
+    positionNaming.maxFixturesPerSide
+  );
   return {
     zone,
     side,
-    rank: Math.max(1, sameZoneSide.findIndex((candidate) => candidate.index === index) + 1),
+    rank,
+    position: outer ? fromLastLabel(rank) : String(rank),
+    outer,
   };
 }
 
-function ordinal(value) {
-  return ["prima", "seconda", "terza", "quarta", "quinta", "sesta", "settima", "ottava"][value - 1] ?? `${value}a`;
+function fromLastLabel(rank) {
+  if (rank <= 1) return "last";
+  return `${rank}-to-last`;
 }
 
 function defaultPositions(count) {
@@ -1647,6 +1678,8 @@ function saveTrainingAnnotation() {
         zone: info.zone,
         side: info.side,
         rank: info.rank,
+        position: info.position,
+        outer: info.outer,
         x: roundNumber(positions[index]?.x ?? 0, 2),
         y: roundNumber(positions[index]?.y ?? 0, 2),
         color: color?.name ?? "off",

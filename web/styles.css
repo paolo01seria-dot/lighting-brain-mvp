@@ -439,6 +439,54 @@ button:disabled {
   pointer-events: none;
 }
 
+.stage-label {
+  position: absolute;
+  z-index: 1;
+  display: none;
+  color: rgba(237, 242, 244, 0.38);
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.is-training .stage-label {
+  display: block;
+}
+
+.stage-label-middle {
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.stage-label-centre {
+  left: 50%;
+  top: 8px;
+  transform: translateX(-50%);
+}
+
+.stage-label-left {
+  left: 25%;
+  top: 8px;
+  transform: translateX(-50%);
+}
+
+.stage-label-right {
+  right: 25%;
+  top: 8px;
+  transform: translateX(50%);
+}
+
+.stage-label-up {
+  left: 8px;
+  top: 8px;
+}
+
+.stage-label-down {
+  left: 8px;
+  bottom: 8px;
+}
+
 .depth-back {
   top: 12%;
   height: 18%;
@@ -514,14 +562,19 @@ button:disabled {
   position: absolute;
   left: 50%;
   top: calc(100% + 5px);
-  width: 104px;
+  display: none;
+  width: 84px;
   transform: translateX(-50%);
   color: rgba(237, 242, 244, 0.8);
-  font-size: 10px;
-  line-height: 1.1;
+  font-size: 9px;
+  line-height: 1.05;
   text-align: center;
   pointer-events: none;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.is-training .light-label {
+  display: block;
 }
 
 .is-training .light {
@@ -563,6 +616,7 @@ button:disabled {
   position: absolute;
   top: 50%;
   z-index: 3;
+  display: none;
   width: 16px;
   min-height: 16px;
   height: 16px;
@@ -577,6 +631,10 @@ button:disabled {
     0 2px 8px rgba(0, 0, 0, 0.46);
   cursor: pointer;
   transform: translateY(-50%);
+}
+
+.is-training .phase-button {
+  display: block;
 }
 
 .phase-button-first {

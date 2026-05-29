@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260529-8">
+    <link rel="stylesheet" href="styles.css?v=20260529-9">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -63,6 +63,14 @@
       .training-summary { min-height: 24px; color: var(--muted); font-size: 12px; }
       .stage { position: relative; overflow: hidden; min-height: 420px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px), radial-gradient(circle at 50% 8%, rgba(79,195,177,.12), transparent 34%), #0c0f10; background-size: 48px 48px, 48px 48px, auto, auto; }
       .stage-depth { position: absolute; left: 7%; right: 7%; border: 1px solid rgba(255,255,255,.08); border-radius: 50%; pointer-events: none; }
+      .stage-label { position: absolute; z-index: 1; display: none; color: rgba(237,242,244,.38); font-size: 10px; line-height: 1; pointer-events: none; }
+      .is-training .stage-label { display: block; }
+      .stage-label-middle { left: 8px; top: 50%; transform: translateY(-50%); }
+      .stage-label-centre { left: 50%; top: 8px; transform: translateX(-50%); }
+      .stage-label-left { left: 25%; top: 8px; transform: translateX(-50%); }
+      .stage-label-right { right: 25%; top: 8px; transform: translateX(50%); }
+      .stage-label-up { left: 8px; top: 8px; }
+      .stage-label-down { left: 8px; bottom: 8px; }
       .depth-back { top: 12%; height: 18%; } .depth-mid { top: 36%; height: 24%; } .depth-front { bottom: 8%; height: 28%; }
       .light { position: absolute; display: block; width: 54px; height: 54px; padding: 0; border-radius: 50%; border: 1px solid rgba(255,255,255,.2); background: radial-gradient(circle at 50% 48%, rgba(255,255,255,.2) 0 10%, rgba(255,255,255,.07) 11% 29%, rgba(0,0,0,.18) 30% 46%, transparent 47%), radial-gradient(circle at 34% 24%, rgba(255,255,255,.28), transparent 24%), linear-gradient(145deg, rgba(255,255,255,.16), rgba(4,6,7,.9) 44%, rgba(255,255,255,.08)); box-shadow: inset 0 2px 10px rgba(255,255,255,.18), inset 0 -13px 22px rgba(0,0,0,.58), 0 5px 17px rgba(0,0,0,.46); cursor: grab; appearance: none; touch-action: none; transform: translate(-50%, -50%) scale(.96); }
       .light::before { content: ""; position: absolute; inset: 12px; border-radius: 50%; background: radial-gradient(circle at 50% 42%, rgba(255,255,255,.2), rgba(255,255,255,.04) 42%, rgba(0,0,0,.1) 78%); }
@@ -71,11 +79,13 @@
       .light.manual { border-color: rgba(255,255,255,.7); }
       .light.blackout { border-color: rgba(255,255,255,.16); background: radial-gradient(circle at 50% 48%, rgba(255,255,255,.12) 0 8%, rgba(255,255,255,.03) 9% 28%, rgba(0,0,0,.6) 29% 64%, rgba(0,0,0,.92) 65%), linear-gradient(145deg, rgba(255,255,255,.11), rgba(0,0,0,.95) 48%, rgba(255,255,255,.05)); box-shadow: inset 0 2px 10px rgba(255,255,255,.12), inset 0 -13px 22px rgba(0,0,0,.72), 0 5px 17px rgba(0,0,0,.46) !important; }
       .light.phase-split::before { inset: 10px; border-radius: 50%; background: linear-gradient(90deg, var(--phase-left, rgba(0,0,0,.96)) 0 50%, var(--phase-right, rgba(0,0,0,.96)) 50% 100%); opacity: 1; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), inset 0 0 12px rgba(0,0,0,.5); }
-      .phase-button { position: absolute; top: 50%; z-index: 3; width: 16px; min-height: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid rgba(255,255,255,.36); background: radial-gradient(circle at 36% 28%, rgba(255,255,255,.58), rgba(255,255,255,.05) 42%, rgba(79,195,177,.62) 74%), #1d2a2c; box-shadow: inset 0 1px 4px rgba(255,255,255,.18), 0 2px 8px rgba(0,0,0,.46); cursor: pointer; transform: translateY(-50%); }
+      .phase-button { position: absolute; top: 50%; z-index: 3; display: none; width: 16px; min-height: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid rgba(255,255,255,.36); background: radial-gradient(circle at 36% 28%, rgba(255,255,255,.58), rgba(255,255,255,.05) 42%, rgba(79,195,177,.62) 74%), #1d2a2c; box-shadow: inset 0 1px 4px rgba(255,255,255,.18), 0 2px 8px rgba(0,0,0,.46); cursor: pointer; transform: translateY(-50%); }
+      .is-training .phase-button { display: block; }
       .phase-button-first { left: -8px; }
       .phase-button-second { right: -8px; }
       .phase-button.is-off { border-color: rgba(255,255,255,.18); background: radial-gradient(circle at 38% 28%, rgba(255,255,255,.22), rgba(255,255,255,.02) 40%, rgba(0,0,0,.92) 76%), #030505; box-shadow: inset 0 1px 5px rgba(255,255,255,.08), 0 1px 5px rgba(0,0,0,.54); }
-      .light-label { position: absolute; left: 50%; top: calc(100% + 5px); width: 104px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 10px; line-height: 1.1; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+      .light-label { position: absolute; left: 50%; top: calc(100% + 5px); display: none; width: 84px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 9px; line-height: 1.05; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+      .is-training .light-label { display: block; }
       .is-training .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
       .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .source-mic-panel, .device-control { display: none !important; }
       .is-mic-mode .source-mic-panel, .is-mic-mode .device-control { display: block !important; }
@@ -236,6 +246,12 @@
           <div class="training-summary" id="trainingSummary">0 marks</div>
 
           <div id="stage" class="stage">
+            <span class="stage-label stage-label-up">up</span>
+            <span class="stage-label stage-label-middle">middle</span>
+            <span class="stage-label stage-label-down">down</span>
+            <span class="stage-label stage-label-left">L</span>
+            <span class="stage-label stage-label-right">R</span>
+            <span class="stage-label stage-label-centre">centre</span>
             <div class="stage-depth depth-back"></div>
             <div class="stage-depth depth-mid"></div>
             <div class="stage-depth depth-front"></div>
@@ -244,6 +260,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260529-5"></script>
+    <script src="app.js?v=20260529-9"></script>
   </body>
 </html>

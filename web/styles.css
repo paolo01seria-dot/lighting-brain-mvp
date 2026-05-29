@@ -79,11 +79,8 @@ p {
   align-items: end;
   justify-content: flex-start;
   gap: 10px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   min-width: 0;
-  overflow-x: auto;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
 }
 
 .mini-player {
@@ -221,9 +218,9 @@ select {
 }
 
 .training-switch {
-  min-width: 96px;
-  width: 96px;
-  flex-basis: 96px;
+  min-width: 84px;
+  width: 84px;
+  flex-basis: 84px;
 }
 
 .training-switch input {
@@ -380,8 +377,8 @@ button:disabled {
 
 .stage-panel {
   display: grid;
-  grid-template-rows: auto minmax(420px, 1fr);
-  gap: 16px;
+  grid-template-rows: auto auto minmax(420px, 1fr);
+  gap: 10px;
   padding: 22px;
   min-width: 0;
   min-height: 560px;
@@ -674,8 +671,13 @@ button:disabled {
 
   label,
   .file-control {
-    flex: 0 0 180px;
-    width: 180px;
+    flex: 1 1 calc((100% - 30px) / 4);
+    min-width: 118px;
+    width: auto;
+  }
+
+  .file-control {
+    flex-basis: calc((100% - 30px) / 4);
   }
 
   .transport {
@@ -683,6 +685,20 @@ button:disabled {
   }
 
   .training-switch {
+    flex: 0 0 78px;
+    min-width: 78px;
+    width: 78px;
+  }
+
+  .sample-control {
+    flex: 1 1 220px;
+  }
+
+  .range-control {
+    flex: 1 1 180px;
+  }
+
+  .number-control {
     flex: 0 0 92px;
   }
 
@@ -697,5 +713,6 @@ button:disabled {
 
   .stage-panel {
     padding: 14px;
+    gap: 8px;
   }
 }

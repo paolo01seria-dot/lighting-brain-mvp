@@ -17,10 +17,9 @@ const trainingColors = [
 ];
 
 const positionNaming = {
+  totalFixtureSlots: 32,
   centreDeadbandPercent: 4,
-  outerLeftPercent: 25,
-  outerRightPercent: 75,
-  maxFixturesPerSide: 8,
+  sideInnerPercent: 25,
 };
 
 const genreProfiles = {
@@ -197,11 +196,12 @@ function positionInfo(index) {
   const position = positions[index] ?? { x: 50, y: 50 };
   const zone = position.y < 33 ? "up" : position.y < 66 ? "middle" : "down";
   const side = Math.abs(position.x - 50) < positionNaming.centreDeadbandPercent ? "centre" : position.x < 50 ? "L" : "R";
+  const slotsPerQuarter = Math.max(1, Math.ceil(positionNaming.totalFixtureSlots / 4));
   const outer =
     side === "L"
-      ? position.x <= positionNaming.outerLeftPercent
+      ? position.x <= positionNaming.sideInnerPercent
       : side === "R"
-        ? position.x >= positionNaming.outerRightPercent
+        ? position.x >= 100 - positionNaming.sideInnerPercent
         : false;
   const sameZoneSide = positions
     .map((candidate, candidateIndex) => ({ ...candidate, index: candidateIndex }))
@@ -210,9 +210,9 @@ function positionInfo(index) {
       const candidateSide = Math.abs(candidate.x - 50) < positionNaming.centreDeadbandPercent ? "centre" : candidate.x < 50 ? "L" : "R";
       const candidateOuter =
         candidateSide === "L"
-          ? candidate.x <= positionNaming.outerLeftPercent
+          ? candidate.x <= positionNaming.sideInnerPercent
           : candidateSide === "R"
-            ? candidate.x >= positionNaming.outerRightPercent
+            ? candidate.x >= 100 - positionNaming.sideInnerPercent
             : false;
       return candidateZone === zone && candidateSide === side && candidateOuter === outer;
     })
@@ -224,14 +224,19 @@ function positionInfo(index) {
   const rank = clamp(
     Math.max(1, sameZoneSide.findIndex((candidate) => candidate.index === index) + 1),
     1,
-    positionNaming.maxFixturesPerSide
+    slotsPerQuarter
   );
+  const macroGroup = side === "centre"
+    ? `${zone}-centre-all`
+    : `${zone}-${side}-${outer ? "all-to-last" : "all"}`;
   return {
     zone,
     side,
     rank,
     position: outer ? fromLastLabel(rank) : String(rank),
     outer,
+    macro_group: macroGroup,
+    slots_per_quarter: slotsPerQuarter,
   };
 }
 
@@ -1680,6 +1685,8 @@ function saveTrainingAnnotation() {
         rank: info.rank,
         position: info.position,
         outer: info.outer,
+        macro_group: info.macro_group,
+        slots_per_quarter: info.slots_per_quarter,
         x: roundNumber(positions[index]?.x ?? 0, 2),
         y: roundNumber(positions[index]?.y ?? 0, 2),
         color: color?.name ?? "off",

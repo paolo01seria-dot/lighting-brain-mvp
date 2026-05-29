@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260529-9">
+    <link rel="stylesheet" href="styles.css?v=20260529-10">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -16,7 +16,7 @@
       .brand-mark { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #ff4f62 0 25%, #ffc857 25% 50%, #30c5ff 50% 75%, #f5f7f8 75%); }
       h1 { margin: 0; font-size: 18px; font-weight: 720; }
       p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
-      .controls { display: flex; align-items: end; justify-content: flex-start; gap: 10px; flex-wrap: nowrap; min-width: 0; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+      .controls { display: flex; align-items: end; justify-content: flex-start; gap: 10px; flex-wrap: wrap; min-width: 0; }
       label, .file-control { display: grid; gap: 6px; min-width: 150px; width: 150px; flex: 0 0 150px; }
       label span, .file-control span { color: var(--muted); font-size: 12px; }
       select, .number-control input, .file-control, button { min-height: 38px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); }
@@ -30,7 +30,7 @@
       .range-control input { accent-color: var(--accent); height: 38px; }
       .range-control span { display: flex; justify-content: space-between; gap: 10px; }
       .transport { display: flex; gap: 8px; width: 132px; flex: 0 0 132px; }
-      .training-switch { min-width: 96px; width: 96px; flex-basis: 96px; }
+      .training-switch { min-width: 84px; width: 84px; flex-basis: 84px; }
       .training-switch input { width: 22px; height: 22px; accent-color: var(--accent); }
       .sample-control { min-width: 220px; width: 220px; flex-basis: 220px; }
       .sample-control input { min-height: 38px; width: 100%; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); }
@@ -56,7 +56,7 @@
       .metadata-panel div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
       .metadata-panel dt { color: var(--muted); font-size: 12px; }
       .metadata-panel dd { margin: 0; overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-      .stage-panel { display: grid; grid-template-rows: auto minmax(420px, 1fr); gap: 16px; padding: 22px; min-width: 0; min-height: 560px; }
+      .stage-panel { display: grid; grid-template-rows: auto auto minmax(420px, 1fr); gap: 10px; padding: 22px; min-width: 0; min-height: 560px; }
       .stage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
       .stage-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
       .stage-toolbar h2 { margin: 0; font-size: 16px; }
@@ -89,7 +89,7 @@
       .is-training .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
       .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .source-mic-panel, .device-control { display: none !important; }
       .is-mic-mode .source-mic-panel, .is-mic-mode .device-control { display: block !important; }
-      @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 0 0 180px; width: 180px; } .transport { flex: 0 0 132px; } .training-switch { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; } }
+      @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 1 1 calc((100% - 30px) / 4); min-width: 118px; width: auto; } .file-control { flex-basis: calc((100% - 30px) / 4); } .transport { flex: 0 0 132px; } .training-switch { flex: 0 0 78px; min-width: 78px; width: 78px; } .sample-control { flex: 1 1 220px; } .range-control { flex: 1 1 180px; } .number-control { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; gap: 8px; } }
     </style>
   </head>
   <body>
@@ -114,6 +114,16 @@
               <option value="rekordbox" disabled>Rekordbox</option>
               <option value="spotify" disabled>Spotify</option>
             </select>
+          </label>
+
+          <div class="transport">
+            <button id="playButton" type="button" disabled>Play</button>
+            <button id="stopButton" type="button" disabled>Stop</button>
+          </div>
+
+          <label class="training-switch">
+            <span>Training</span>
+            <input id="trainingMode" type="checkbox">
           </label>
 
           <label class="file-control source-file-control">
@@ -163,16 +173,6 @@
           <label class="range-control">
             <span>Differenziazione <strong id="differentiationValue">2</strong></span>
             <input id="differentiation" type="range" min="1" max="8" value="2">
-          </label>
-
-          <div class="transport">
-            <button id="playButton" type="button" disabled>Play</button>
-            <button id="stopButton" type="button" disabled>Stop</button>
-          </div>
-
-          <label class="training-switch">
-            <span>Training</span>
-            <input id="trainingMode" type="checkbox">
           </label>
 
           <label class="sample-control">
@@ -260,6 +260,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260529-9"></script>
+    <script src="app.js?v=20260529-10"></script>
   </body>
 </html>

@@ -14,6 +14,7 @@ audio = [
   "sounddevice",
 ]
 realtime = [
+  "numpy",
   "sounddevice",
 ]
 aubio = [
@@ -23,6 +24,7 @@ aubio = [
 [project.scripts]
 lighting-brain = "lighting_brain.cli:main"
 lighting-audio-analyze = "lighting_brain.audio_cli:main"
+lighting-live-audio = "lighting_brain.live_audio_cli:main"
 
 [build-system]
 requires = ["hatchling"]

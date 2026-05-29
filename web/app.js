@@ -70,6 +70,7 @@ let mediaElementSource;
 let objectUrl;
 let mediaStream;
 let mediaSourceNode;
+let liveEventSource;
 let audioBuffer;
 let loadedFileName = "";
 let loadedTimelineName = "";
@@ -98,6 +99,7 @@ let previousLow = 0;
 let previousMid = 0;
 let previousHigh = 0;
 let previousRms = 0;
+let lastEnergyDropTime = -999;
 let musicalClock = {
   lastPulseTime: null,
   interval: null,
@@ -417,6 +419,7 @@ function stopPlayback(options = {}) {
   previousMid = 0;
   previousHigh = 0;
   previousRms = 0;
+  lastEnergyDropTime = -999;
   previousSpectrum = null;
   sceneVariant = 0;
   lastSceneCategory = "ambient_no_beat";
@@ -559,6 +562,12 @@ function updateLights(frequencyData, energy, rms, profile, spectralFlux) {
   const midDelta = mid - previousMid;
   const highDelta = high - previousHigh;
   const rmsDelta = rms - previousRms;
+  if (shouldBlackoutForEnergyDrop(energy, rms, time)) {
+    blackoutLights();
+    rememberPreviousAudioState({ energy, low, mid, high, rms });
+    frameCounter += 1;
+    return;
+  }
   const lowOnset = Math.max(0, lowDelta * 1.45 + rmsDelta * 1.4);
   const tonalOnset = Math.max(0, midDelta * 2.3 + highDelta * 1.75 + spectralFlux * 2.55 + energyDelta * 0.58);
   const onsetStrength = Math.max(0, energyDelta * 1.1 + lowOnset + tonalOnset + high * 0.055);
@@ -607,12 +616,33 @@ function updateLights(frequencyData, energy, rms, profile, spectralFlux) {
   }
 
   renderLights();
-  previousEnergy = energy;
-  previousLow = low;
-  previousMid = mid;
-  previousHigh = high;
-  previousRms = rms;
+  rememberPreviousAudioState({ energy, low, mid, high, rms });
   frameCounter += 1;
+}
+
+function shouldBlackoutForEnergyDrop(energy, rms, time) {
+  const energyDrop = previousEnergy - energy;
+  const rmsDrop = previousRms - rms;
+  const absoluteQuiet = energy < 0.045 && rms < 0.035;
+  const abruptDrop = previousEnergy > 0.22 && energyDrop > 0.16 && energy < 0.18;
+  const abruptRmsDrop = previousRms > 0.12 && rmsDrop > 0.08 && rms < 0.08;
+  const cooldownReady = time - lastEnergyDropTime > 0.22;
+  if ((absoluteQuiet || abruptDrop || abruptRmsDrop) && cooldownReady) {
+    lastEnergyDropTime = time;
+    musicalClock.confidence *= 0.38;
+    musicalClock.source = "none";
+    logEvent(`${formatTime(Math.floor(time))} blackout energy drop`);
+    return true;
+  }
+  return false;
+}
+
+function rememberPreviousAudioState(reading) {
+  previousEnergy = reading.energy;
+  previousLow = reading.low;
+  previousMid = reading.mid;
+  previousHigh = reading.high;
+  previousRms = reading.rms;
 }
 
 function updateMusicalClock(reading) {
@@ -961,6 +991,59 @@ function updateMeter(energy) {
   const percent = Math.round(energy * 100);
   elements.energyLabel.textContent = `${percent}%`;
   elements.energyFill.style.width = `${percent}%`;
+}
+
+function liveFrameToFrequencyData(frame) {
+  const frequencyData = new Uint8Array(64);
+  const spectrum = Array.isArray(frame.spectrum) ? frame.spectrum : [];
+  if (!spectrum.length) return frequencyData;
+  frequencyData.forEach((_value, index) => {
+    const sourceIndex = Math.min(spectrum.length - 1, Math.floor((index / frequencyData.length) * spectrum.length));
+    frequencyData[index] = Math.round(clamp(spectrum[sourceIndex], 0, 1) * 255);
+  });
+  return frequencyData;
+}
+
+function handleLiveAudioFrame(frame) {
+  if (frame.error) {
+    setState("Live audio error");
+    logEvent(frame.error);
+    stopLiveAudio(false);
+    return;
+  }
+  const profile = genreProfiles[elements.genreProfile.value];
+  const frequencyData = liveFrameToFrequencyData(frame);
+  const energy = clamp(Number(frame.energy ?? 0), 0, 1);
+  const rms = energy / 4;
+  const time = Number(frame.time ?? 0);
+  startedAt = audioContext ? audioContext.currentTime - time : startedAt;
+  drawLiveSpectrum(frequencyData);
+  if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment" || frame.energy_drop > 0.18) {
+    blackoutLights();
+    updateMeter(energy);
+    updatePlayerTime();
+    maybeLogLiveFrame(frame);
+    rememberPreviousAudioState({
+      energy,
+      low: 0,
+      mid: 0,
+      high: 0,
+      rms,
+    });
+    return;
+  }
+  updateLights(frequencyData, energy, rms, profile, Number(frame.spectral_flux ?? 0));
+  updateMeter(energy);
+  updatePlayerTime();
+  maybeLogLiveFrame(frame);
+  previousSpectrum = new Uint8Array(frequencyData);
+}
+
+function maybeLogLiveFrame(frame) {
+  const second = Math.floor(Number(frame.time ?? 0));
+  if (second === lastEventSecond || second % 2 !== 0) return;
+  lastEventSecond = second;
+  logEvent(`${formatTime(second)} live ${frame.sample_category ?? "unknown"} energy:${Math.round((frame.energy ?? 0) * 100)}%`);
 }
 
 function maybeLogSignal(energy) {
@@ -1629,6 +1712,14 @@ async function toggleTransport() {
     }
     return;
   }
+  if (inputMode === "system_audio") {
+    if (isPlaying) {
+      stopLiveAudio();
+    } else {
+      await startLiveAudio();
+    }
+    return;
+  }
 
   if (isPlaying) {
     pauseAudio();
@@ -1641,13 +1732,17 @@ function setInputMode(mode) {
   if (inputMode === "timeline" && mode !== "timeline") {
     stopTimelinePlayback({ resetPosition: false, keepLights: true });
   }
+  if (inputMode === "system_audio" && mode !== "system_audio") {
+    stopLiveAudio(false);
+  }
   inputMode = mode;
   const fileMode = mode === "file";
   const timelineMode = mode === "timeline";
-  document.body.classList.toggle("is-mic-mode", mode === "mic_device");
+  const liveMode = mode === "system_audio";
+  document.body.classList.toggle("is-mic-mode", mode === "mic_device" || liveMode);
   elements.audioFile.disabled = !fileMode;
   elements.audioFile.closest(".file-control").classList.toggle("disabled", !fileMode);
-  elements.audioDevice.disabled = mode !== "mic_device";
+  elements.audioDevice.disabled = mode !== "mic_device" && !liveMode;
   if (fileMode) {
     stopDeviceInput();
     setState(hasLoadedAudio() ? "Ready" : "Idle");
@@ -1657,6 +1752,7 @@ function setInputMode(mode) {
     elements.stopButton.disabled = !hasLoadedAudio();
   } else if (timelineMode) {
     stopDeviceInput();
+    stopLiveAudio(false);
     stopPlayback({ resetPosition: false, keepLights: true });
     setState(timelineEvents.length ? "Timeline ready" : "Load timeline");
     elements.trackLabel.textContent = loadedTimelineName || "No timeline loaded";
@@ -1666,7 +1762,7 @@ function setInputMode(mode) {
     if (timelineEvents.length) {
       drawTimelineOverview();
     }
-  } else {
+  } else if (mode === "mic_device") {
     stopPlayback({ resetPosition: false, keepLights: true });
     setState("Mic ready");
     elements.trackLabel.textContent = "Mic Device";
@@ -1674,6 +1770,15 @@ function setInputMode(mode) {
     elements.playButton.disabled = false;
     elements.stopButton.disabled = true;
     refreshAudioDevices();
+  } else {
+    stopDeviceInput();
+    stopPlayback({ resetPosition: false, keepLights: true });
+    setState("Live audio ready");
+    elements.trackLabel.textContent = "Python Live Audio";
+    elements.playButton.textContent = "Listen";
+    elements.playButton.disabled = false;
+    elements.stopButton.disabled = true;
+    refreshLiveAudioDevices();
   }
   updatePlayerTime();
 }
@@ -1715,6 +1820,92 @@ function normalizeInputDeviceName(label, index) {
   return clean;
 }
 
+async function refreshLiveAudioDevices() {
+  elements.audioDevice.innerHTML = '<option value="default">Default Python input</option>';
+  try {
+    const response = await fetch("http://127.0.0.1:8790/devices", { cache: "no-store" });
+    if (!response.ok) throw new Error(`live server ${response.status}`);
+    const devices = await response.json();
+    devices.filter(shouldShowLiveDevice).forEach((device) => {
+      const option = document.createElement("option");
+      option.value = String(device.index);
+      option.textContent = normalizeLiveDeviceName(device.name, device.index);
+      elements.audioDevice.appendChild(option);
+    });
+    setState("Live audio ready");
+  } catch (_error) {
+    setState("Start Python live server");
+    logEvent("run: lighting-live-audio");
+  }
+}
+
+function shouldShowLiveDevice(device) {
+  const name = String(device.name || "").toLowerCase();
+  if (name.includes("zoom")) return false;
+  if (name.includes("teams")) return false;
+  return true;
+}
+
+function normalizeLiveDeviceName(name, index) {
+  const clean = String(name || "").trim();
+  if (!clean) return index === 0 ? "Default Python input" : `Input ${index}`;
+  if (/blackhole|loopback|soundflower|vb-cable|audio hijack/i.test(clean)) {
+    return `${clean} (system loopback)`;
+  }
+  if (/macbook|built-in|microphone/i.test(clean)) {
+    return "MacBook microphone";
+  }
+  return clean;
+}
+
+async function startLiveAudio() {
+  await ensureAudioContext();
+  stopPlayback({ resetPosition: false, keepLights: true });
+  stopDeviceInput(false);
+  stopLiveAudio(false);
+  const selectedDevice = elements.audioDevice.value || "default";
+  const url = `http://127.0.0.1:8790/events?device=${encodeURIComponent(selectedDevice)}`;
+  liveEventSource = new EventSource(url);
+  isPlaying = true;
+  startedAt = audioContext.currentTime;
+  pausedAt = 0;
+  elements.playButton.textContent = "Pause";
+  elements.playButton.disabled = false;
+  elements.stopButton.disabled = false;
+  elements.trackLabel.textContent = "Python Live Audio";
+  setState("Live listening");
+  logEvent("python live audio");
+  liveEventSource.onmessage = (event) => {
+    handleLiveAudioFrame(JSON.parse(event.data));
+  };
+  liveEventSource.onerror = () => {
+    if (inputMode !== "system_audio") return;
+    setState("Live audio error");
+    logEvent("python live server disconnected");
+    stopLiveAudio(false);
+  };
+}
+
+function stopLiveAudio(resetUi = true) {
+  if (liveEventSource) {
+    liveEventSource.close();
+  }
+  liveEventSource = null;
+  if (inputMode === "system_audio") {
+    isPlaying = false;
+    cancelAnimationFrame(animationFrame);
+    if (resetUi) {
+      setState("Live audio ready");
+      elements.trackLabel.textContent = "Python Live Audio";
+      elements.playButton.textContent = "Listen";
+      elements.playButton.disabled = false;
+      elements.stopButton.disabled = true;
+      updateMeter(0);
+      updatePlayerTime();
+    }
+  }
+}
+
 async function startDeviceInput() {
   if (!navigator.mediaDevices?.getUserMedia) {
     setState("Mic error");
@@ -1724,6 +1915,7 @@ async function startDeviceInput() {
 
   await ensureAudioContext();
   stopPlayback({ resetPosition: false, keepLights: true });
+  stopLiveAudio(false);
   stopDeviceInput(false);
   elements.playButton.disabled = true;
   elements.stopButton.disabled = true;
@@ -1814,6 +2006,9 @@ elements.stopButton.addEventListener("click", () => {
   if (inputMode === "mic_device") {
     stopDeviceInput();
     blackoutLights();
+  } else if (inputMode === "system_audio") {
+    stopLiveAudio();
+    blackoutLights();
   } else if (inputMode === "timeline") {
     stopTimelinePlayback({ resetPosition: true });
   } else {
@@ -1834,6 +2029,14 @@ elements.audioDevice.addEventListener("change", () => {
       elements.playButton.disabled = false;
       elements.stopButton.disabled = true;
       logEvent(micDenied ? "microphone permission denied" : error.message);
+    });
+  } else if (inputMode === "system_audio" && isPlaying) {
+    startLiveAudio().catch((error) => {
+      setState("Live audio error");
+      elements.playButton.textContent = "Listen";
+      elements.playButton.disabled = false;
+      elements.stopButton.disabled = true;
+      logEvent(error.message);
     });
   }
 });

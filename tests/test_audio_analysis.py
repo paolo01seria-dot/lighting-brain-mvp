@@ -7,6 +7,7 @@ from lighting_brain.audio_analysis import (
   sample_category_for_features,
   segment_boundaries,
 )
+from lighting_brain.realtime_audio import classify_live_frame
 from lighting_brain.sample_categories import classify_sample_category
 
 
@@ -85,6 +86,15 @@ class AudioAnalysisTest(unittest.TestCase):
       dedupe_boundaries([0.0, 0.1, 1.0, 2.0], 2.0),
       [0.0, 1.0, 2.0],
     )
+
+  def test_live_frame_energy_drop_becomes_blackout_category(self):
+    category = classify_live_frame(
+      energy=0.08,
+      previous_energy=0.42,
+      bands=[0.01] * 16,
+    )
+
+    self.assertEqual(category, "silence_or_pause")
 
 
 if __name__ == "__main__":

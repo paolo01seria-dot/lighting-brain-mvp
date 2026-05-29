@@ -116,6 +116,21 @@ http://localhost:8787/web/
 La UI carica un audio locale e pilota un tester luci 5x5 simulato nel browser.
 La direzione corretta del tester e' descritta in `docs/visual_tester_direction.md`.
 
+## Demo audio live Python
+
+Il browser resta interfaccia/training, mentre il cervello audio gira in Python:
+
+```shell
+lighting-live-audio --list-devices
+lighting-live-audio
+```
+
+Poi nella webapp scegli `Python Live Audio` e premi `Listen`.
+
+Nota Mac: per leggere l'audio del computer senza microfono serve un device
+loopback, per esempio BlackHole. Senza loopback, Python vede solo microfoni/input
+esposti da macOS.
+
 ## Prova con profilo genere
 
 ```shell

@@ -97,6 +97,7 @@ analisi.
 - Software ponte: vedi `docs/bridge_software_targets.md`.
 - Hardware futuro: vedi `docs/hardware_future.md`.
 - Regole architetturali: vedi `docs/architecture_rules.md`.
+- Metadati training/annotazione: vedi `docs/training_metadata.md`.
 - Profili genere: vedi `scene_maps/genre_profiles.json`.
 - Prima priorita' musicale dopo il metal: house e techno.
 

@@ -96,6 +96,55 @@ class TimelineTest(unittest.TestCase):
     self.assertEqual(timeline["rhythm_events"][-1]["scene"], "drop_scene")
     self.assertIn("symmetry", timeline["rhythm_events"][-1])
 
+  def test_timeline_events_include_training_metadata_shell(self):
+    analysis = {
+      "path": "track.mp3",
+      "bpm": 128,
+      "segments": [
+        {
+          "start": 0.0,
+          "end": 8.0,
+          "label": "verse",
+          "features": {
+            "mean_rms": 0.02,
+            "mean_centroid": 2500,
+            "beat_count": 16,
+            "onset_rate": 2.0,
+          },
+        },
+        {
+          "start": 8.0,
+          "end": 16.0,
+          "label": "chorus",
+          "features": {
+            "mean_rms": 0.04,
+            "mean_centroid": 3300,
+            "beat_count": 16,
+            "onset_rate": 3.0,
+          },
+        },
+      ],
+    }
+    scene_map = {
+      "name": "base",
+      "default_scene": "fallback",
+      "bpm_rules": [{"min_bpm": 0, "max_bpm": 999, "energy": "medium"}],
+      "sample_category_scene_pools": {
+        "steady_bass_pulse": ["pulse_scene"],
+        "high_energy_drop": ["drop_scene"],
+      },
+    }
+
+    timeline = build_timeline(analysis, scene_map)
+    metadata = timeline["events"][1]["metadata"]
+
+    self.assertEqual(metadata["time"]["duration_beats"], 16)
+    self.assertEqual(metadata["audio"]["energy_trend"], "rising")
+    self.assertEqual(metadata["lighting"]["fixture_coordination"], "synchronized")
+    self.assertIn("lighting_intent", metadata["designer_logic"])
+    self.assertIn("scene_freshness_score", metadata["freshness"])
+    self.assertFalse(metadata["training_quality"]["usable_for_training"])
+
 
 if __name__ == "__main__":
   unittest.main()

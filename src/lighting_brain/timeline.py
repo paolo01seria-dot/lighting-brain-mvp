@@ -1,3 +1,4 @@
+from .metadata import build_event_metadata
 from .sample_categories import classify_sample_category
 from .scene_manager import SceneManager
 
@@ -46,7 +47,9 @@ def build_timeline(
     energy = genre_profile.get("energy_bias", energy)
 
   events = []
-  for segment in analysis.get("segments", []):
+  segments = analysis.get("segments", [])
+  for index, segment in enumerate(segments):
+    previous_segment = segments[index - 1] if index > 0 else None
     label = segment["label"]
     fallback_scene = segment_scenes.get(label, default_scene)
     sample_category = classify_sample_category(segment, bpm=bpm, energy=energy)
@@ -72,7 +75,18 @@ def build_timeline(
       },
       "track_bpm": bpm,
       "track_energy": energy,
-      "genre": genre_name
+      "genre": genre_name,
+      "metadata": build_event_metadata(
+        segment=segment,
+        previous_segment=previous_segment,
+        bpm=bpm,
+        genre_name=genre_name,
+        sample_category=sample_category,
+        scene=scene,
+        intent=intent,
+        scene_decision=scene_decision,
+        differentiation=differentiation,
+      )
     })
 
   return {

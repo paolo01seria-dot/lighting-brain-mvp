@@ -37,6 +37,16 @@ const elements = {
   seekSlider: document.querySelector("#seekSlider"),
   currentTimeLabel: document.querySelector("#currentTimeLabel"),
   durationLabel: document.querySelector("#durationLabel"),
+  trainingMode: document.querySelector("#trainingMode"),
+  currentSampleCategory: document.querySelector("#currentSampleCategory"),
+  currentSceneCategory: document.querySelector("#currentSceneCategory"),
+  currentIntent: document.querySelector("#currentIntent"),
+  currentGesture: document.querySelector("#currentGesture"),
+  currentEnergyTrend: document.querySelector("#currentEnergyTrend"),
+  saveAnnotationButton: document.querySelector("#saveAnnotationButton"),
+  downloadAnnotationsButton: document.querySelector("#downloadAnnotationsButton"),
+  clearTrainingLightsButton: document.querySelector("#clearTrainingLightsButton"),
+  trainingSummary: document.querySelector("#trainingSummary"),
   resetLayoutButton: document.querySelector("#resetLayoutButton"),
   stage: document.querySelector("#stage"),
 };
@@ -92,6 +102,7 @@ let lights = [];
 let lightStates = [];
 let positions = [];
 let dragging = null;
+let trainingAnnotations = [];
 
 function buildLights(count, keepPositions = true) {
   const nextCount = clamp(Math.round(count), 1, 32);
@@ -108,8 +119,13 @@ function buildLights(count, keepPositions = true) {
     light.type = "button";
     light.className = "light";
     light.dataset.index = String(index);
+    light.title = positionName(index);
     light.style.left = `${position.x}%`;
     light.style.top = `${position.y}%`;
+    const label = document.createElement("span");
+    label.className = "light-label";
+    label.textContent = positionName(index);
+    light.appendChild(label);
     light.addEventListener("pointerdown", startDrag);
     elements.stage.appendChild(light);
     lights.push(light);
@@ -117,10 +133,51 @@ function buildLights(count, keepPositions = true) {
       intensity: 0,
       age: 999,
       colorIndex: index % colors.length,
+      manualColorIndex: null,
     });
   });
 
   renderLights();
+}
+
+function refreshLightPositionLabels() {
+  lights.forEach((light, index) => {
+    const label = light.querySelector(".light-label");
+    const name = positionName(index);
+    light.title = name;
+    if (label) label.textContent = name;
+  });
+}
+
+function positionName(index) {
+  const info = positionInfo(index);
+  if (info.side === "centro") {
+    return `${info.zone} centro`;
+  }
+  return `${info.zone} ${ordinal(info.rank)} ${info.side}`;
+}
+
+function positionInfo(index) {
+  const position = positions[index] ?? { x: 50, y: 50 };
+  const zone = position.y < 33 ? "alto" : position.y < 66 ? "medio" : "basso";
+  const side = Math.abs(position.x - 50) < 4 ? "centro" : position.x < 50 ? "sinistra" : "destra";
+  const sameZoneSide = positions
+    .map((candidate, candidateIndex) => ({ ...candidate, index: candidateIndex }))
+    .filter((candidate) => {
+      const candidateZone = candidate.y < 33 ? "alto" : candidate.y < 66 ? "medio" : "basso";
+      const candidateSide = Math.abs(candidate.x - 50) < 4 ? "centro" : candidate.x < 50 ? "sinistra" : "destra";
+      return candidateZone === zone && candidateSide === side;
+    })
+    .sort((left, right) => Math.abs(left.x - 50) - Math.abs(right.x - 50));
+  return {
+    zone,
+    side,
+    rank: Math.max(1, sameZoneSide.findIndex((candidate) => candidate.index === index) + 1),
+  };
+}
+
+function ordinal(value) {
+  return ["prima", "seconda", "terza", "quarta", "quinta", "sesta", "settima", "ottava"][value - 1] ?? `${value}a`;
 }
 
 function defaultPositions(count) {
@@ -762,6 +819,9 @@ function blackoutLights() {
   lightStates.forEach((state) => {
     state.intensity = 0;
     state.age = 999;
+    if (!isTrainingMode()) {
+      state.manualColorIndex = null;
+    }
   });
   renderLights();
 }
@@ -769,8 +829,10 @@ function blackoutLights() {
 function renderLights() {
   lights.forEach((light, index) => {
     const state = lightStates[index] ?? { intensity: 0, colorIndex: index % colors.length };
-    const intensity = clamp(state.intensity, 0, 1);
-    const [r, g, b] = colors[state.colorIndex].value;
+    const manual = state.manualColorIndex !== null && state.manualColorIndex !== undefined;
+    const intensity = manual ? 1 : clamp(state.intensity, 0, 1);
+    const colorIndex = manual ? state.manualColorIndex : state.colorIndex;
+    const [r, g, b] = colors[colorIndex].value;
     const visible = intensity > 0.04;
 
     light.style.background = visible
@@ -783,6 +845,7 @@ function renderLights() {
     light.style.setProperty("--beam", visible ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
     light.style.setProperty("--beam-opacity", visible ? String(intensity * 0.42) : "0");
     light.classList.toggle("active", intensity > 0.62);
+    light.classList.toggle("manual", manual);
   });
 }
 
@@ -1029,6 +1092,7 @@ function updatePlayerTime() {
   elements.currentTimeLabel.textContent = formatTime(Math.floor(current));
   elements.durationLabel.textContent = inputMode === "mic_device" ? "live" : formatTime(Math.floor(duration));
   drawOverviewPlayhead(current, duration);
+  updateTrainingReadout(current);
   if (inputMode === "timeline") {
     elements.seekSlider.disabled = !timelineEvents.length;
     elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
@@ -1041,6 +1105,17 @@ function updatePlayerTime() {
   }
   elements.seekSlider.disabled = false;
   elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
+}
+
+function updateTrainingReadout(time) {
+  const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
+  const rhythmEvent = inputMode === "timeline" ? findTimelineRhythmEventAt(time) : null;
+  const metadata = sceneEvent?.metadata ?? {};
+  elements.currentSampleCategory.textContent = sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? "-";
+  elements.currentSceneCategory.textContent = metadata.lighting?.scene_category ?? sceneEvent?.scene ?? "-";
+  elements.currentIntent.textContent = metadata.designer_logic?.lighting_intent ?? sceneEvent?.intent ?? "-";
+  elements.currentGesture.textContent = rhythmEvent?.gesture ?? "-";
+  elements.currentEnergyTrend.textContent = metadata.audio?.energy_trend ?? "-";
 }
 
 function hasLoadedAudio() {
@@ -1279,6 +1354,97 @@ function findNextTimelineIndex(time) {
 function findNextTimelineRhythmIndex(time) {
   const index = timelineRhythmEvents.findIndex((event) => event.time >= time);
   return index === -1 ? timelineRhythmEvents.length : index;
+}
+
+function isTrainingMode() {
+  return Boolean(elements.trainingMode?.checked);
+}
+
+function cycleTrainingLight(index) {
+  if (!isTrainingMode()) return;
+  const state = lightStates[index];
+  if (!state) return;
+  state.manualColorIndex = state.manualColorIndex === null || state.manualColorIndex === undefined
+    ? 0
+    : state.manualColorIndex >= colors.length - 1
+      ? null
+      : state.manualColorIndex + 1;
+  state.intensity = state.manualColorIndex === null ? 0 : 1;
+  renderLights();
+}
+
+function clearTrainingLights() {
+  lightStates.forEach((state) => {
+    state.manualColorIndex = null;
+    state.intensity = 0;
+    state.age = 999;
+  });
+  renderLights();
+}
+
+function saveTrainingAnnotation() {
+  const time = currentPlaybackTime();
+  const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
+  const rhythmEvent = inputMode === "timeline" ? findTimelineRhythmEventAt(time) : null;
+  const annotation = {
+    id: `mark_${String(trainingAnnotations.length + 1).padStart(3, "0")}`,
+    time: roundNumber(time, 4),
+    input_mode: inputMode,
+    track: loadedTimelineName || loadedFileName || null,
+    brain: {
+      scene: sceneEvent?.scene ?? null,
+      sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? null,
+      intent: sceneEvent?.intent ?? null,
+      rhythm_gesture: rhythmEvent?.gesture ?? null,
+      metadata: sceneEvent?.metadata ?? null,
+    },
+    desired_lights: lightStates.map((state, index) => {
+      const info = positionInfo(index);
+      return {
+        index,
+        position_name: positionName(index),
+        zone: info.zone,
+        side: info.side,
+        rank: info.rank,
+        x: roundNumber(positions[index]?.x ?? 0, 2),
+        y: roundNumber(positions[index]?.y ?? 0, 2),
+        color: state.manualColorIndex === null || state.manualColorIndex === undefined
+          ? "off"
+          : colors[state.manualColorIndex].name,
+        intensity: state.manualColorIndex === null || state.manualColorIndex === undefined ? 0 : 1,
+      };
+    }),
+  };
+  trainingAnnotations.push(annotation);
+  updateTrainingSummary();
+  logEvent(`saved ${annotation.id} ${formatTime(Math.floor(time))}`);
+}
+
+function updateTrainingSummary() {
+  elements.trainingSummary.textContent = `${trainingAnnotations.length} marks`;
+}
+
+function downloadTrainingAnnotations() {
+  const payload = {
+    version: 1,
+    created_at: new Date().toISOString(),
+    track: loadedTimelineName || loadedFileName || null,
+    annotations: trainingAnnotations,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `lighting-training-${Date.now()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function roundNumber(value, digits) {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
 }
 
 async function toggleTransport() {
@@ -1549,6 +1715,23 @@ elements.differentiation.addEventListener("input", () => {
   elements.differentiationValue.textContent = elements.differentiation.value;
 });
 
+elements.trainingMode.addEventListener("change", () => {
+  document.body.classList.toggle("is-training", isTrainingMode());
+  logEvent(isTrainingMode() ? "training on" : "training off");
+});
+
+elements.saveAnnotationButton.addEventListener("click", () => {
+  saveTrainingAnnotation();
+});
+
+elements.downloadAnnotationsButton.addEventListener("click", () => {
+  downloadTrainingAnnotations();
+});
+
+elements.clearTrainingLightsButton.addEventListener("click", () => {
+  clearTrainingLights();
+});
+
 elements.resetLayoutButton.addEventListener("click", () => {
   buildLights(Number(elements.lightCount.value), false);
   logEvent("layout reset");
@@ -1559,8 +1742,7 @@ function startDrag(event) {
   const index = Number(light.dataset.index);
   light.setPointerCapture(event.pointerId);
   light.classList.add("dragging");
-  dragging = { light, index };
-  moveDraggedLight(event);
+  dragging = { light, index, moved: false };
   light.addEventListener("pointermove", moveDraggedLight);
   light.addEventListener("pointerup", stopDrag);
   light.addEventListener("pointercancel", stopDrag);
@@ -1571,21 +1753,32 @@ function moveDraggedLight(event) {
   const rect = elements.stage.getBoundingClientRect();
   const x = clamp(((event.clientX - rect.left) / rect.width) * 100, 4, 96);
   const y = clamp(((event.clientY - rect.top) / rect.height) * 100, 6, 94);
+  const previous = positions[dragging.index] ?? { x, y };
+  if (Math.abs(previous.x - x) > 0.4 || Math.abs(previous.y - y) > 0.4) {
+    dragging.moved = true;
+  }
   positions[dragging.index] = { x, y };
   dragging.light.style.left = `${x}%`;
   dragging.light.style.top = `${y}%`;
+  refreshLightPositionLabels();
 }
 
 function stopDrag(event) {
   const light = event.currentTarget;
+  const wasClick = dragging && !dragging.moved;
+  const index = dragging?.index;
   light.classList.remove("dragging");
   light.releasePointerCapture(event.pointerId);
   light.removeEventListener("pointermove", moveDraggedLight);
   light.removeEventListener("pointerup", stopDrag);
   light.removeEventListener("pointercancel", stopDrag);
   dragging = null;
+  if (wasClick && Number.isInteger(index)) {
+    cycleTrainingLight(index);
+  }
 }
 
 buildLights(Number(elements.lightCount.value), false);
 setInputMode(elements.inputSource.value);
 drawTrackOverview();
+updateTrainingSummary();

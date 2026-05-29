@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260529-3">
+    <link rel="stylesheet" href="styles.css?v=20260529-4">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -30,6 +30,8 @@
       .range-control input { accent-color: var(--accent); height: 38px; }
       .range-control span { display: flex; justify-content: space-between; gap: 10px; }
       .transport { display: flex; gap: 8px; width: 132px; flex: 0 0 132px; }
+      .training-switch { min-width: 96px; width: 96px; flex-basis: 96px; }
+      .training-switch input { width: 22px; height: 22px; accent-color: var(--accent); }
       button { padding: 0 15px; cursor: pointer; }
       button:disabled { color: #6e777c; cursor: not-allowed; }
       #playButton:not(:disabled) { background: #1f4f47; border-color: #367b70; }
@@ -46,9 +48,17 @@
       .track-overview, .live-spectrum, .event-log { border: 1px solid var(--line); border-radius: var(--radius); background: #0d1011; }
       .track-overview, .live-spectrum { display: block; width: 100%; height: 132px; margin: 0 0 16px; }
       .event-log { height: 180px; overflow: hidden; padding: 12px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+      .metadata-panel { margin: 0 0 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #101315; }
+      .metadata-panel h3 { margin: 0 0 10px; font-size: 13px; }
+      .metadata-panel dl { display: grid; gap: 7px; margin: 0; }
+      .metadata-panel div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
+      .metadata-panel dt { color: var(--muted); font-size: 12px; }
+      .metadata-panel dd { margin: 0; overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
       .stage-panel { display: grid; grid-template-rows: auto minmax(420px, 1fr); gap: 16px; padding: 22px; min-width: 0; min-height: 560px; }
       .stage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+      .stage-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
       .stage-toolbar h2 { margin: 0; font-size: 16px; }
+      .training-summary { min-height: 24px; color: var(--muted); font-size: 12px; }
       .stage { position: relative; overflow: hidden; min-height: 420px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px), radial-gradient(circle at 50% 8%, rgba(79,195,177,.12), transparent 34%), #0c0f10; background-size: 48px 48px, 48px 48px, auto, auto; }
       .stage-depth { position: absolute; left: 7%; right: 7%; border: 1px solid rgba(255,255,255,.08); border-radius: 50%; pointer-events: none; }
       .depth-back { top: 12%; height: 18%; } .depth-mid { top: 36%; height: 24%; } .depth-front { bottom: 8%; height: 28%; }
@@ -56,6 +66,9 @@
       .light::before { content: ""; position: absolute; inset: 12px; border-radius: 50%; background: radial-gradient(circle at 50% 42%, rgba(255,255,255,.2), rgba(255,255,255,.04) 42%, rgba(0,0,0,.1) 78%); }
       .light::after { content: ""; position: absolute; inset: -13px; border-radius: 50%; background: var(--beam, transparent); opacity: var(--beam-opacity, 0); filter: blur(7px); z-index: -1; }
       .light.active { transform: translate(-50%, -50%) scale(1.05); }
+      .light.manual { border-color: rgba(255,255,255,.7); }
+      .light-label { position: absolute; left: 50%; top: calc(100% + 5px); width: 104px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 10px; line-height: 1.1; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+      .is-training .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
       .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .source-mic-panel, .device-control { display: none !important; }
       .is-mic-mode .source-mic-panel, .is-mic-mode .device-control { display: block !important; }
       @media (max-width: 860px) { .topbar, .tester-layout { display: block; } .controls { justify-content: stretch; margin-top: 18px; } label, .file-control { flex: 1 1 190px; width: auto; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; } }
@@ -138,6 +151,11 @@
             <button id="playButton" type="button" disabled>Play</button>
             <button id="stopButton" type="button" disabled>Stop</button>
           </div>
+
+          <label class="training-switch">
+            <span>Training</span>
+            <input id="trainingMode" type="checkbox">
+          </label>
         </div>
 
         <div class="mini-player source-file-panel" aria-label="Audio position">
@@ -166,6 +184,16 @@
           </div>
           <canvas id="trackOverview" class="track-overview source-file-panel" width="520" height="132" aria-label="Track overview"></canvas>
           <canvas id="liveSpectrum" class="live-spectrum source-mic-panel" width="520" height="132" aria-label="Live spectrum"></canvas>
+          <section class="metadata-panel" aria-label="Current metadata">
+            <h3>Current brain</h3>
+            <dl>
+              <div><dt>Sample</dt><dd id="currentSampleCategory">-</dd></div>
+              <div><dt>Scene</dt><dd id="currentSceneCategory">-</dd></div>
+              <div><dt>Intent</dt><dd id="currentIntent">-</dd></div>
+              <div><dt>Gesture</dt><dd id="currentGesture">-</dd></div>
+              <div><dt>Energy</dt><dd id="currentEnergyTrend">-</dd></div>
+            </dl>
+          </section>
           <div class="event-log" id="eventLog" aria-live="polite"></div>
         </aside>
 
@@ -175,8 +203,15 @@
               <h2>Mini Light Tester</h2>
               <p>Drag lights to sketch a real setup</p>
             </div>
-            <button id="resetLayoutButton" type="button">Reset layout</button>
+            <div class="stage-actions">
+              <button id="saveAnnotationButton" type="button">Save mark</button>
+              <button id="downloadAnnotationsButton" type="button">Download</button>
+              <button id="clearTrainingLightsButton" type="button">Clear lights</button>
+              <button id="resetLayoutButton" type="button">Reset layout</button>
+            </div>
           </div>
+
+          <div class="training-summary" id="trainingSummary">0 marks</div>
 
           <div id="stage" class="stage">
             <div class="stage-depth depth-back"></div>
@@ -187,6 +222,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260529-3"></script>
+    <script src="app.js?v=20260529-4"></script>
   </body>
 </html>

@@ -216,6 +216,18 @@ select {
   flex: 0 0 132px;
 }
 
+.training-switch {
+  min-width: 96px;
+  width: 96px;
+  flex-basis: 96px;
+}
+
+.training-switch input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+}
+
 button {
   padding: 0 15px;
   cursor: pointer;
@@ -307,6 +319,45 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.metadata-panel {
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #101315;
+}
+
+.metadata-panel h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.metadata-panel dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.metadata-panel div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.metadata-panel dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metadata-panel dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .stage-panel {
   display: grid;
   grid-template-rows: auto minmax(420px, 1fr);
@@ -321,6 +372,19 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.stage-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.training-summary {
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .stage-toolbar h2 {
@@ -423,8 +487,31 @@ button:disabled {
   transform: translate(-50%, -50%) scale(1.05);
 }
 
+.light-label {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 5px);
+  width: 104px;
+  transform: translateX(-50%);
+  color: rgba(237, 242, 244, 0.8);
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: center;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.is-training .light {
+  outline: 1px solid rgba(79, 195, 177, 0.45);
+  outline-offset: 4px;
+}
+
 .light.active::before {
   background: radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.1) 46%, transparent 80%);
+}
+
+.light.manual {
+  border-color: rgba(255, 255, 255, 0.7);
 }
 
 @media (max-width: 860px) {

@@ -39,6 +39,7 @@ def build_timeline(
   genre_name = None
   scene_manager = SceneManager(
     scene_pools=resolve_scene_pools(scene_map, genre_profile),
+    scene_probabilities=resolve_scene_probabilities(scene_map, genre_profile),
     differentiation=differentiation,
   )
 
@@ -110,6 +111,16 @@ def resolve_scene_pools(scene_map, genre_profile=None):
     pools.update(genre_profile.get("sample_category_scene_pools", {}))
 
   return pools or None
+
+
+def resolve_scene_probabilities(scene_map, genre_profile=None):
+  probabilities = {}
+  probabilities.update(scene_map.get("scene_probabilities", {}))
+
+  if genre_profile:
+    probabilities.update(genre_profile.get("scene_probabilities", {}))
+
+  return probabilities or None
 
 
 def intent_for_segment(label):

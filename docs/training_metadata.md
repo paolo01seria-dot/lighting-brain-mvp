@@ -40,6 +40,22 @@ Each timeline scene event now contains a `metadata` object with:
 Generated timelines use `training_quality.usable_for_training = false` because
 they are predictions, not observed ground truth from real videos.
 
+## Scene Pools And Genre Probability
+
+Scene pools are shared across genres. A genre should not remove useful lighting
+ideas from another genre; it should only change ordering and probability.
+
+Current MVP behavior:
+
+- every genre loads the same combined scene pool
+- scenes native to the selected genre are ordered first
+- every known scene starts with probability `0.9`
+- probability `0` means the scene is excluded for that genre
+
+Training will later edit these probabilities per genre and per scene, so the
+brain can prefer genre-appropriate scenes without losing access to the broader
+lighting vocabulary.
+
 ## Future video dataset schema
 
 When analyzing real party videos, each labeled segment should add:

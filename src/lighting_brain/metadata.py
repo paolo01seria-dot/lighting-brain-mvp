@@ -288,6 +288,7 @@ def freshness_metadata(scene_decision, differentiation):
     "sample_category_repetition_count": repeat_count,
     "same_scene_recently_used": repeat_count > 1 and not scene_decision.get("scene_changed"),
     "scene_freshness_score": round(freshness_score, 3),
+    "scene_probability": scene_decision.get("scene_probability"),
     "variation_needed": bool(scene_decision.get("scene_changed")),
     "variation_type": "scene_pool_rotation" if scene_decision.get("scene_changed") else "hold_current_scene",
     "allowed_variations": [

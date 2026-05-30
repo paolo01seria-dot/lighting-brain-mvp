@@ -46,14 +46,15 @@ class RepetitionTracker:
 
 
 class SceneManager:
-  def __init__(self, scene_pools=None, differentiation=2):
+  def __init__(self, scene_pools=None, scene_probabilities=None, differentiation=2):
     self.scene_pools = scene_pools or {}
+    self.scene_probabilities = scene_probabilities or {}
     self.differentiation = max(1, int(differentiation))
     self.tracker = RepetitionTracker()
     self._selected_indexes = {}
 
   def pick_scene(self, category, fallback_scene):
-    pool = self.scene_pools.get(category) or [fallback_scene]
+    pool = self._usable_pool(category, fallback_scene)
     repeat_count = self.tracker.observe(category)
     current_index = self._selected_indexes.get(category, 0)
     changed = False
@@ -67,8 +68,26 @@ class SceneManager:
 
     return {
       "scene": pool[current_index],
+      "scene_probability": self.scene_probabilities.get(pool[current_index], 1.0),
       "category_repeat_count": repeat_count,
       "scene_changed": changed,
       "scene_pool_size": len(pool),
       "scene_pool_index": current_index,
     }
+
+  def _usable_pool(self, category, fallback_scene):
+    raw_pool = self.scene_pools.get(category) or [fallback_scene]
+    normalized = [self._scene_name(scene) for scene in raw_pool]
+    unique = list(dict.fromkeys(normalized))
+    weighted = [
+      scene for scene in unique
+      if self.scene_probabilities.get(scene, 1.0) > 0
+    ]
+    weighted.sort(key=lambda scene: self.scene_probabilities.get(scene, 1.0), reverse=True)
+    return weighted or [fallback_scene]
+
+  @staticmethod
+  def _scene_name(scene):
+    if isinstance(scene, dict):
+      return scene.get("scene") or scene.get("name")
+    return scene

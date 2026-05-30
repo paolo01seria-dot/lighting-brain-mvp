@@ -1,5 +1,7 @@
 import unittest
 
+from lighting_brain.genres import load_genre_profile
+from lighting_brain.scene_manager import SceneManager
 from lighting_brain.timeline import build_timeline
 
 
@@ -144,6 +146,27 @@ class TimelineTest(unittest.TestCase):
     self.assertIn("lighting_intent", metadata["designer_logic"])
     self.assertIn("scene_freshness_score", metadata["freshness"])
     self.assertFalse(metadata["training_quality"]["usable_for_training"])
+
+  def test_genre_profile_uses_shared_scene_pool_with_selected_genre_first(self):
+    profile = load_genre_profile("scene_maps/genre_profiles.json", "house")
+    steady_pool = profile["sample_category_scene_pools"]["steady_bass_pulse"]
+
+    self.assertEqual(steady_pool[:2], ["house_four_on_floor_pulse", "house_side_chase_warm"])
+    self.assertIn("metal_pulse_red_hits", steady_pool)
+    self.assertIn("techno_hypnotic_grid", steady_pool)
+    self.assertEqual(profile["scene_probabilities"]["metal_pulse_red_hits"], 0.9)
+
+  def test_scene_manager_ignores_zero_probability_scenes(self):
+    manager = SceneManager(
+      scene_pools={"steady_bass_pulse": ["never_use", "usable"]},
+      scene_probabilities={"never_use": 0.0, "usable": 0.9},
+      differentiation=1,
+    )
+
+    decision = manager.pick_scene("steady_bass_pulse", "fallback")
+
+    self.assertEqual(decision["scene"], "usable")
+    self.assertEqual(decision["scene_probability"], 0.9)
 
 
 if __name__ == "__main__":

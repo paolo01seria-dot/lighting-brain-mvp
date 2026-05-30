@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .optional_deps import require_module
-from .realtime_audio import band_levels, classify_live_frame, list_input_devices, rms_level
+from .realtime_audio import band_levels, classify_live_frame, component_lane_levels, list_input_devices, rms_level
 
 
 def main():
@@ -97,6 +97,7 @@ def make_server(args):
             bands = band_levels(samples, samplerate, 16)
             flux = sum(max(0.0, band - previous_bands[index]) for index, band in enumerate(bands)) / len(bands)
             category = classify_live_frame(energy, previous_energy, bands)
+            component_lanes = component_lane_levels(bands, flux, energy)
             event = {
               "time": round(time.monotonic() - started_at, 4),
               "energy": round(energy, 4),
@@ -104,6 +105,7 @@ def make_server(args):
               "energy_delta": round(energy - previous_energy, 4),
               "energy_drop": round(max(0.0, previous_energy - energy), 4),
               "sample_category": category,
+              "component_lanes": component_lanes,
               "spectrum": [round(value, 4) for value in bands],
               "spectral_flux": round(flux, 4),
               "source": "sounddevice",

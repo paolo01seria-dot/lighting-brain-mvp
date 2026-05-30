@@ -7,7 +7,7 @@ from lighting_brain.audio_analysis import (
   sample_category_for_features,
   segment_boundaries,
 )
-from lighting_brain.realtime_audio import classify_live_frame
+from lighting_brain.realtime_audio import classify_live_frame, component_lane_levels
 from lighting_brain.sample_categories import classify_sample_category
 
 
@@ -95,6 +95,15 @@ class AudioAnalysisTest(unittest.TestCase):
     )
 
     self.assertEqual(category, "silence_or_pause")
+
+  def test_component_lane_levels_expose_bass_and_drum_proxies(self):
+    bands = [0.62, 0.58, 0.5, 0.42, 0.08, 0.08, 0.07, 0.07, 0.05, 0.04, 0.03, 0.28, 0.35, 0.38, 0.3, 0.22]
+
+    lanes = component_lane_levels(bands, spectral_flux=0.18, energy=0.44)
+
+    self.assertGreater(lanes["bass"], lanes["vocal"])
+    self.assertGreater(lanes["drum"], 0.5)
+    self.assertEqual(set(lanes), {"drum", "bass", "vocal", "other"})
 
 
 if __name__ == "__main__":

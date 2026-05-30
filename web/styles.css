@@ -369,7 +369,7 @@ button:disabled {
 .live-spectrum {
   display: block;
   width: 100%;
-  height: 132px;
+  height: 156px;
   margin: 0 0 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);

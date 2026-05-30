@@ -68,3 +68,35 @@ def classify_live_frame(energy, previous_energy, bands):
   if high > 0.32 and energy > 0.18:
     return "bright_percussive_texture"
   return "ambient_no_beat"
+
+
+def component_lane_levels(bands, spectral_flux, energy):
+  """Estimate Music Dissector-style component lanes from live spectrum bands.
+
+  These are lightweight real-time proxies, not source-separated stems. They are
+  useful for training because they expose which musical component likely drove a
+  lighting decision before heavier stem separation is introduced.
+  """
+  if not bands:
+    return {"drum": 0.0, "bass": 0.0, "vocal": 0.0, "other": 0.0}
+
+  def band_average(start, end):
+    chunk = bands[start:end]
+    return sum(chunk) / max(1, len(chunk))
+
+  bass_raw = band_average(0, 4)
+  low_mid = band_average(4, 8)
+  mid = band_average(7, 12)
+  high = band_average(11, len(bands))
+  transient = min(1.0, max(0.0, spectral_flux * 4.5))
+
+  drum = min(1.0, transient * 0.74 + bass_raw * 0.28 + high * 0.34)
+  bass = min(1.0, bass_raw * 1.72)
+  vocal = min(1.0, (low_mid * 0.35 + mid * 0.82) * (1.0 - transient * 0.22))
+  other = min(1.0, (mid * 0.32 + high * 0.45 + energy * 0.3) * (1.0 - bass * 0.1))
+  return {
+    "drum": round(drum, 4),
+    "bass": round(bass, 4),
+    "vocal": round(vocal, 4),
+    "other": round(other, 4),
+  }

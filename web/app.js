@@ -22,6 +22,15 @@ const positionNaming = {
   sideInnerPercent: 25,
 };
 
+const componentLaneNames = ["drum", "bass", "vocal", "other"];
+const componentLaneLabels = {
+  drum: "Drum",
+  bass: "Bass",
+  vocal: "Vocal",
+  other: "Other",
+};
+const componentLaneWindowSeconds = 12;
+
 const genreProfiles = {
   house: { smoothing: 0.48, pulse: 1.28, palette: [1, 2, 3, 4], motion: "bounce", chase: 1.0, threshold: 0.062, decay: 0.78, spread: 2 },
   techno: { smoothing: 0.54, pulse: 1.34, palette: [3, 4, 0], motion: "scan", chase: 1.4, threshold: 0.058, decay: 0.82, spread: 2 },
@@ -118,6 +127,7 @@ let frameCounter = 0;
 let lastEventSecond = -1;
 let categoryCounters = {};
 let currentSceneByCategory = {};
+let componentHistory = [];
 
 let lights = [];
 let lightStates = [];
@@ -516,6 +526,7 @@ function stopPlayback(options = {}) {
   lastEventSecond = -1;
   categoryCounters = {};
   currentSceneByCategory = {};
+  componentHistory = [];
   setState(hasLoadedAudio() ? "Ready" : "Idle");
   elements.playButton.disabled = !hasLoadedAudio();
   elements.playButton.textContent = "Play";
@@ -637,7 +648,8 @@ function animate() {
   const energy = Math.min(1, smoothedEnergy * profile.pulse);
   const time = audioContext ? audioContext.currentTime - startedAt : 0;
   const energyDeltaForCapture = energy - previousEnergy;
-  drawLiveSpectrum(frequencyData);
+  const componentLanes = componentLanesFromFrequency(frequencyData, spectralFlux, energy);
+  drawComponentLanes(componentLanes, time, { beatPulse: shouldDrawBeatPulse(time) });
   updateLights(frequencyData, energy, rms, profile, spectralFlux);
   captureTrainingFrame({
     time,
@@ -645,6 +657,7 @@ function animate() {
     energy_delta: energyDeltaForCapture,
     spectral_flux: spectralFlux,
     sample_category: categoryForEnergy(energy),
+    component_lanes: componentLanes,
   });
   updateMeter(energy);
   updatePlayerTime();
@@ -1141,7 +1154,10 @@ function handleLiveAudioFrame(frame) {
   const rms = energy / 4;
   const time = Number(frame.time ?? 0);
   startedAt = audioContext ? audioContext.currentTime - time : startedAt;
-  drawLiveSpectrum(frequencyData);
+  const componentLanes = frame.component_lanes
+    ? normalizeComponentLanes(frame.component_lanes)
+    : componentLanesFromFrequency(frequencyData, Number(frame.spectral_flux ?? 0), energy);
+  drawComponentLanes(componentLanes, time, { beatPulse: shouldDrawBeatPulse(time) });
   if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment" || frame.energy_drop > 0.18) {
     blackoutLights();
     captureTrainingFrame({
@@ -1150,6 +1166,7 @@ function handleLiveAudioFrame(frame) {
       energy_delta: Number(frame.energy_delta ?? 0),
       spectral_flux: Number(frame.spectral_flux ?? 0),
       sample_category: frame.sample_category ?? "silence_or_pause",
+      component_lanes: componentLanes,
     });
     updateMeter(energy);
     updatePlayerTime();
@@ -1171,6 +1188,7 @@ function handleLiveAudioFrame(frame) {
     energy_delta: Number(frame.energy_delta ?? 0),
     spectral_flux: Number(frame.spectral_flux ?? 0),
     sample_category: frame.sample_category,
+    component_lanes: componentLanes,
   });
   updateMeter(energy);
   updatePlayerTime();
@@ -1622,7 +1640,50 @@ function drawOverviewPlayhead(current, duration) {
   context.stroke();
 }
 
-function drawLiveSpectrum(frequencyData) {
+function componentLanesFromFrequency(frequencyData, spectralFlux = 0, energy = 0) {
+  const bands = getBands(frequencyData, 8);
+  const low = (bands[0] ?? 0) * 0.72 + (bands[1] ?? 0) * 0.42;
+  const lowMid = (bands[2] ?? 0) * 0.36 + (bands[3] ?? 0) * 0.44;
+  const mid = (bands[3] ?? 0) * 0.3 + (bands[4] ?? 0) * 0.5 + (bands[5] ?? 0) * 0.2;
+  const high = (bands[6] ?? 0) * 0.4 + (bands[7] ?? 0) * 0.6;
+  const transient = clamp(spectralFlux * 4.5, 0, 1);
+  const bass = clamp(low * 1.85, 0, 1);
+  const drum = clamp(transient * 0.74 + low * 0.34 + high * 0.32, 0, 1);
+  const vocal = clamp((lowMid * 0.35 + mid * 0.85) * (1 - transient * 0.22), 0, 1);
+  const other = clamp((mid * 0.35 + high * 0.42 + energy * 0.32) * (1 - bass * 0.12), 0, 1);
+  return {
+    drum: roundNumber(drum, 4),
+    bass: roundNumber(bass, 4),
+    vocal: roundNumber(vocal, 4),
+    other: roundNumber(other, 4),
+  };
+}
+
+function normalizeComponentLanes(componentLanes) {
+  if (!componentLanes) return null;
+  return componentLaneNames.reduce((lanes, name) => {
+    lanes[name] = roundNumber(clamp(componentLanes[name] ?? 0, 0, 1), 4);
+    return lanes;
+  }, {});
+}
+
+function strongestComponentLane(componentLanes) {
+  if (!componentLanes) return "-";
+  let strongest = "drum";
+  componentLaneNames.forEach((name) => {
+    if ((componentLanes[name] ?? 0) > (componentLanes[strongest] ?? 0)) {
+      strongest = name;
+    }
+  });
+  return `${componentLaneLabels[strongest]} ${Math.round((componentLanes[strongest] ?? 0) * 100)}%`;
+}
+
+function shouldDrawBeatPulse(time) {
+  if (!musicalClock.interval || musicalClock.confidence < 0.18 || musicalClock.lastPulseTime === null) return false;
+  return Math.abs(time - musicalClock.lastPulseTime) < 0.08;
+}
+
+function drawComponentLanes(componentLanes, time, options = {}) {
   const canvas = elements.liveSpectrum;
   if (!canvas) return;
   const context = canvas.getContext("2d");
@@ -1639,25 +1700,78 @@ function drawLiveSpectrum(frequencyData) {
   context.fillRect(0, 0, width, height);
   drawOverviewGrid(context, width, height);
 
-  const bars = 42;
-  const gap = Math.max(1, Math.round(2 * ratio));
-  const barWidth = Math.max(2, Math.floor((width - gap * (bars - 1)) / bars));
-  const binsPerBar = Math.max(1, Math.floor(frequencyData.length / bars));
-  for (let bar = 0; bar < bars; bar += 1) {
-    const start = bar * binsPerBar;
-    const end = Math.min(frequencyData.length, start + binsPerBar);
-    let value = 0;
-    for (let index = start; index < end; index += 1) {
-      value += frequencyData[index];
-    }
-    value = value / Math.max(1, end - start) / 255;
-    const boosted = clamp(value * (inputMode === "mic_device" ? 3.6 : 2.1), 0, 1);
-    const x = bar * (barWidth + gap);
-    const barHeight = Math.max(2, boosted * height * 0.9);
-    const hue = bar < bars * 0.28 ? "255, 196, 87" : bar < bars * 0.66 ? "79, 195, 177" : "245, 247, 248";
-    context.fillStyle = `rgba(${hue}, ${0.2 + boosted * 0.72})`;
-    context.fillRect(x, height - barHeight, barWidth, barHeight);
+  if (Number.isFinite(time)) {
+    componentHistory.push({ time, lanes: componentLanes, beat: Boolean(options.beatPulse) });
+    componentHistory = componentHistory.filter((item) => time - item.time <= componentLaneWindowSeconds);
   }
+
+  const laneHeight = height / componentLaneNames.length;
+  componentLaneNames.forEach((name, laneIndex) => {
+    const y = laneIndex * laneHeight;
+    context.fillStyle = laneIndex % 2 === 0 ? "rgba(255, 255, 255, 0.018)" : "rgba(255, 255, 255, 0.036)";
+    context.fillRect(0, y, width, laneHeight);
+    context.fillStyle = "rgba(245, 247, 248, 0.88)";
+    context.font = `${Math.round(11 * ratio)}px system-ui, sans-serif`;
+    context.textBaseline = "middle";
+    context.fillText(componentLaneLabels[name], Math.round(8 * ratio), y + laneHeight / 2);
+    context.strokeStyle = "rgba(145, 163, 168, 0.18)";
+    context.beginPath();
+    context.moveTo(0, y + laneHeight);
+    context.lineTo(width, y + laneHeight);
+    context.stroke();
+  });
+
+  const colorByLane = {
+    drum: [255, 196, 87],
+    bass: [88, 123, 255],
+    vocal: [255, 132, 60],
+    other: [245, 247, 248],
+  };
+  const currentTime = Number.isFinite(time) ? time : componentHistory.at(-1)?.time ?? 0;
+  const windowStart = currentTime - componentLaneWindowSeconds;
+  componentHistory.forEach((point, pointIndex) => {
+    const x = clamp((point.time - windowStart) / componentLaneWindowSeconds, 0, 1) * width;
+    if (point.beat) {
+      context.strokeStyle = "rgba(255, 255, 255, 0.42)";
+      context.lineWidth = Math.max(1, ratio);
+      context.beginPath();
+      context.moveTo(x, 0);
+      context.lineTo(x, height);
+      context.stroke();
+    }
+    componentLaneNames.forEach((name, laneIndex) => {
+      const value = clamp(point.lanes?.[name] ?? 0, 0, 1);
+      const previous = componentHistory[pointIndex - 1];
+      const previousValue = clamp(previous?.lanes?.[name] ?? value, 0, 1);
+      const previousX = previous
+        ? clamp((previous.time - windowStart) / componentLaneWindowSeconds, 0, 1) * width
+        : x;
+      const yBase = laneIndex * laneHeight + laneHeight * 0.82;
+      const y = yBase - value * laneHeight * 0.62;
+      const previousY = yBase - previousValue * laneHeight * 0.62;
+      const [r, g, b] = colorByLane[name];
+      context.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.36 + value * 0.5})`;
+      context.lineWidth = Math.max(1, 1.6 * ratio);
+      context.beginPath();
+      context.moveTo(previousX, previousY);
+      context.lineTo(x, y);
+      context.stroke();
+      if (value > 0.42) {
+        context.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.08 + value * 0.24})`;
+        context.fillRect(x - 1 * ratio, laneIndex * laneHeight + laneHeight * 0.15, 2 * ratio, laneHeight * 0.7);
+      }
+    });
+  });
+
+  context.fillStyle = "rgba(13, 16, 17, 0.78)";
+  context.fillRect(0, 0, Math.round(62 * ratio), height);
+  componentLaneNames.forEach((name, laneIndex) => {
+    const y = laneIndex * laneHeight;
+    context.fillStyle = "rgba(245, 247, 248, 0.9)";
+    context.font = `${Math.round(11 * ratio)}px system-ui, sans-serif`;
+    context.textBaseline = "middle";
+    context.fillText(componentLaneLabels[name], Math.round(8 * ratio), y + laneHeight / 2);
+  });
 }
 
 async function seekToSliderValue(value) {
@@ -1715,6 +1829,7 @@ function selectedTrainingDuration() {
 
 function beginTrainingCapture(source) {
   if (!isTrainingMode()) return;
+  componentHistory = [];
   trainingCapture = {
     active: true,
     frames: [],
@@ -1761,7 +1876,7 @@ function captureTrainingFrame(reading) {
   if (previous && time - previous.time < 0.18) return;
   const category = reading.sample_category ?? categoryForEnergy(reading.energy ?? 0);
   const sceneChanged = updateCategoryScene(category);
-  trainingCapture.frames.push({
+  const frame = {
     time,
     source: trainingCapture.source ?? inputMode,
     genre: elements.genreProfile.value,
@@ -1773,8 +1888,16 @@ function captureTrainingFrame(reading) {
     energy: roundNumber(reading.energy ?? 0, 4),
     energy_trend: energyTrend(reading.energy_delta ?? ((reading.energy ?? 0) - previousEnergy)),
     spectral_flux: roundNumber(reading.spectral_flux ?? 0, 4),
+    component_lanes: normalizeComponentLanes(reading.component_lanes),
+    dominant_component: strongestComponentLane(reading.component_lanes),
     clock_source: musicalClock.source,
-  });
+  };
+  trainingCapture.frames.push(frame);
+  elements.currentSampleCategory.textContent = frame.sample_category ?? "-";
+  elements.currentSceneCategory.textContent = frame.scene_category ?? "-";
+  elements.currentIntent.textContent = frame.intent ?? "-";
+  elements.currentGesture.textContent = frame.dominant_component ?? frame.clock_source ?? "-";
+  elements.currentEnergyTrend.textContent = frame.energy_trend ?? "-";
 }
 
 function sceneCategoryForSample(category, sceneChanged) {
@@ -1823,7 +1946,7 @@ function applyTrainingReviewFrame(time) {
   elements.currentSampleCategory.textContent = frame.sample_category ?? "-";
   elements.currentSceneCategory.textContent = frame.scene_category ?? "-";
   elements.currentIntent.textContent = frame.intent ?? "-";
-  elements.currentGesture.textContent = frame.clock_source ?? "-";
+  elements.currentGesture.textContent = frame.dominant_component ?? frame.clock_source ?? "-";
   elements.currentEnergyTrend.textContent = frame.energy_trend ?? "-";
   updateMeter(frame.energy ?? 0);
   return true;
@@ -2228,6 +2351,7 @@ async function startLiveAudio() {
   elements.trackLabel.textContent = "Python Live Audio";
   setState("Live listening");
   logEvent("python live audio");
+  componentHistory = [];
   beginTrainingCapture("python_live_audio");
   liveEventSource.onmessage = (event) => {
     handleLiveAudioFrame(JSON.parse(event.data));
@@ -2292,6 +2416,7 @@ async function startDeviceInput() {
   elements.trackLabel.textContent = "Mic Device";
   setState("Listening");
   await refreshAudioDevices();
+  componentHistory = [];
   beginTrainingCapture("mic_device");
   animate();
   logEvent("mic device live");

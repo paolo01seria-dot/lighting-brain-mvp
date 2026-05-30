@@ -24,6 +24,7 @@ aubio = [
 [project.scripts]
 lighting-brain = "lighting_brain.cli:main"
 lighting-audio-analyze = "lighting_brain.audio_cli:main"
+lighting-harmonix-import = "lighting_brain.harmonix_cli:main"
 lighting-live-audio = "lighting_brain.live_audio_cli:main"
 
 [build-system]

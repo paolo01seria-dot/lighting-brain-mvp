@@ -1905,13 +1905,22 @@ async function refreshLiveAudioDevices() {
     const response = await fetch("http://127.0.0.1:8790/devices", { cache: "no-store" });
     if (!response.ok) throw new Error(`live server ${response.status}`);
     const devices = await response.json();
-    devices.filter(shouldShowLiveDevice).forEach((device) => {
+    const visibleDevices = devices.filter(shouldShowLiveDevice);
+    const loopbackDevice = visibleDevices.find(isSystemLoopbackDevice);
+    visibleDevices.forEach((device) => {
       const option = document.createElement("option");
       option.value = String(device.index);
       option.textContent = normalizeLiveDeviceName(device.name, device.index);
       elements.audioDevice.appendChild(option);
     });
-    setState("Live audio ready");
+    if (loopbackDevice) {
+      elements.audioDevice.value = String(loopbackDevice.index);
+      setState("System audio ready");
+      logEvent(`system loopback: ${loopbackDevice.name}`);
+    } else {
+      setState("No system loopback");
+      logEvent("install/select BlackHole to hear Spotify/Rekordbox");
+    }
   } catch (_error) {
     setState("Start Python live server");
     logEvent("run: lighting-live-audio");
@@ -1925,10 +1934,14 @@ function shouldShowLiveDevice(device) {
   return true;
 }
 
+function isSystemLoopbackDevice(device) {
+  return /blackhole|loopback|soundflower|vb-cable|audio hijack/i.test(String(device.name || ""));
+}
+
 function normalizeLiveDeviceName(name, index) {
   const clean = String(name || "").trim();
   if (!clean) return index === 0 ? "Default Python input" : `Input ${index}`;
-  if (/blackhole|loopback|soundflower|vb-cable|audio hijack/i.test(clean)) {
+  if (isSystemLoopbackDevice({ name: clean })) {
     return `${clean} (system loopback)`;
   }
   if (/macbook|built-in|microphone/i.test(clean)) {

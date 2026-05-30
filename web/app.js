@@ -187,7 +187,7 @@ function refreshLightPositionLabels() {
 function positionName(index) {
   const info = positionInfo(index);
   if (info.side === "centre") {
-    return `${info.zone}-centre`;
+    return `${info.zone}-${info.position}`;
   }
   return `${info.zone}-${info.side}-${info.position}`;
 }
@@ -226,6 +226,7 @@ function positionInfo(index) {
     1,
     slotsPerQuarter
   );
+  const centrePosition = side === "centre" ? centrePositionInfo(index, zone) : null;
   const macroGroup = side === "centre"
     ? `${zone}-centre-all`
     : `${zone}-${side}-${outer ? "all-to-last" : "all"}`;
@@ -233,7 +234,8 @@ function positionInfo(index) {
     zone,
     side,
     rank,
-    position: outer ? fromLastLabel(rank) : String(rank),
+    position: centrePosition?.label ?? (outer ? fromLastLabel(rank) : String(rank)),
+    centre_offset: centrePosition?.offset ?? null,
     outer,
     macro_group: macroGroup,
     slots_per_quarter: slotsPerQuarter,
@@ -249,26 +251,27 @@ function positionSide(index, position, zone) {
     return position.x < 50 ? "L" : "R";
   }
 
+  return "centre";
+}
+
+function centrePositionInfo(index, zone) {
   const centreCandidates = positions
     .map((candidate, candidateIndex) => ({ ...candidate, index: candidateIndex }))
     .filter((candidate) => {
       return positionZone(candidate) === zone && Math.abs(candidate.x - 50) < positionNaming.centreDeadbandPercent;
     })
     .sort((left, right) => {
-      if (left.x !== right.x) return left.x - right.x;
+      if (left.y !== right.y) return left.y - right.y;
       return left.index - right.index;
     });
 
-  if (centreCandidates.length === 1) {
-    return "centre";
-  }
-
   const order = centreCandidates.findIndex((candidate) => candidate.index === index);
-  const centreOrder = Math.floor(centreCandidates.length / 2);
-  if (centreCandidates.length % 2 === 1 && order === centreOrder) {
-    return "centre";
+  const centreOrder = Math.floor((centreCandidates.length - 1) / 2);
+  const offset = centreOrder - order;
+  if (offset === 0) {
+    return { label: "centre", offset };
   }
-  return order < centreCandidates.length / 2 ? "L" : "R";
+  return { label: `centre${offset > 0 ? "+" : ""}${offset}`, offset };
 }
 
 function fromLastLabel(rank) {
@@ -1715,6 +1718,7 @@ function saveTrainingAnnotation() {
         side: info.side,
         rank: info.rank,
         position: info.position,
+        centre_offset: info.centre_offset,
         outer: info.outer,
         macro_group: info.macro_group,
         slots_per_quarter: info.slots_per_quarter,

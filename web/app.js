@@ -71,6 +71,8 @@ const elements = {
   currentIntent: document.querySelector("#currentIntent"),
   currentGesture: document.querySelector("#currentGesture"),
   currentEnergyTrend: document.querySelector("#currentEnergyTrend"),
+  cueNameInput: document.querySelector("#cueNameInput"),
+  cueProbabilityInput: document.querySelector("#cueProbabilityInput"),
   saveAnnotationButton: document.querySelector("#saveAnnotationButton"),
   downloadAnnotationsButton: document.querySelector("#downloadAnnotationsButton"),
   clearTrainingLightsButton: document.querySelector("#clearTrainingLightsButton"),
@@ -134,9 +136,11 @@ let lightStates = [];
 let positions = [];
 let dragging = null;
 let trainingAnnotations = [];
+let selectedTrainingCueId = null;
 let trainingCapture = {
   active: false,
   frames: [],
+  cues: [],
   duration: 0,
   reviewTime: 0,
   startedAt: 0,
@@ -1683,6 +1687,10 @@ function shouldDrawBeatPulse(time) {
   return Math.abs(time - musicalClock.lastPulseTime) < 0.08;
 }
 
+function trainingReviewAvailable() {
+  return !trainingCapture.active && trainingCapture.frames.length > 0;
+}
+
 function drawComponentLanes(componentLanes, time, options = {}) {
   const canvas = elements.liveSpectrum;
   if (!canvas) return;
@@ -1727,25 +1735,40 @@ function drawComponentLanes(componentLanes, time, options = {}) {
     vocal: [255, 132, 60],
     other: [245, 247, 248],
   };
-  const currentTime = Number.isFinite(time) ? time : componentHistory.at(-1)?.time ?? 0;
-  const windowStart = currentTime - componentLaneWindowSeconds;
-  componentHistory.forEach((point, pointIndex) => {
-    const x = clamp((point.time - windowStart) / componentLaneWindowSeconds, 0, 1) * width;
+  const reviewMode = !trainingCapture.active && trainingCapture.frames.length > 0;
+  const history = reviewMode
+    ? trainingCapture.frames.map((frame) => ({
+      time: frame.time,
+      lanes: frame.component_lanes,
+      beat: Boolean(frame.rhythm_split?.fastest_component),
+    }))
+    : componentHistory;
+  const captureDuration = reviewMode ? trainingCapture.duration : componentLaneWindowSeconds;
+  const currentTime = reviewMode ? currentPlaybackTime() : Number.isFinite(time) ? time : history.at(-1)?.time ?? 0;
+  const windowStart = reviewMode ? 0 : currentTime - componentLaneWindowSeconds;
+  history.forEach((point, pointIndex) => {
+    const progress = reviewMode
+      ? clamp(point.time / Math.max(captureDuration, 0.001), 0, 1)
+      : clamp((point.time - windowStart) / componentLaneWindowSeconds, 0, 1);
+    const pointX = progress * width;
     if (point.beat) {
       context.strokeStyle = "rgba(255, 255, 255, 0.42)";
       context.lineWidth = Math.max(1, ratio);
       context.beginPath();
-      context.moveTo(x, 0);
-      context.lineTo(x, height);
+      context.moveTo(pointX, 0);
+      context.lineTo(pointX, height);
       context.stroke();
     }
     componentLaneNames.forEach((name, laneIndex) => {
       const value = clamp(point.lanes?.[name] ?? 0, 0, 1);
-      const previous = componentHistory[pointIndex - 1];
+      const previous = history[pointIndex - 1];
       const previousValue = clamp(previous?.lanes?.[name] ?? value, 0, 1);
-      const previousX = previous
-        ? clamp((previous.time - windowStart) / componentLaneWindowSeconds, 0, 1) * width
-        : x;
+      const previousProgress = previous
+        ? reviewMode
+          ? clamp(previous.time / Math.max(captureDuration, 0.001), 0, 1)
+          : clamp((previous.time - windowStart) / componentLaneWindowSeconds, 0, 1)
+        : progress;
+      const previousX = previousProgress * width;
       const yBase = laneIndex * laneHeight + laneHeight * 0.82;
       const y = yBase - value * laneHeight * 0.62;
       const previousY = yBase - previousValue * laneHeight * 0.62;
@@ -1754,14 +1777,16 @@ function drawComponentLanes(componentLanes, time, options = {}) {
       context.lineWidth = Math.max(1, 1.6 * ratio);
       context.beginPath();
       context.moveTo(previousX, previousY);
-      context.lineTo(x, y);
+      context.lineTo(pointX, y);
       context.stroke();
       if (value > 0.42) {
         context.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.08 + value * 0.24})`;
-        context.fillRect(x - 1 * ratio, laneIndex * laneHeight + laneHeight * 0.15, 2 * ratio, laneHeight * 0.7);
+        context.fillRect(pointX - 1 * ratio, laneIndex * laneHeight + laneHeight * 0.15, 2 * ratio, laneHeight * 0.7);
       }
     });
   });
+
+  drawTrainingCueMarkers(context, width, height, ratio, captureDuration, reviewMode ? currentTime : null);
 
   context.fillStyle = "rgba(13, 16, 17, 0.78)";
   context.fillRect(0, 0, Math.round(62 * ratio), height);
@@ -1772,6 +1797,154 @@ function drawComponentLanes(componentLanes, time, options = {}) {
     context.textBaseline = "middle";
     context.fillText(componentLaneLabels[name], Math.round(8 * ratio), y + laneHeight / 2);
   });
+}
+
+function drawTrainingCueMarkers(context, width, height, ratio, duration, currentTime) {
+  if (!trainingReviewAvailable()) return;
+  trainingCapture.cues.forEach((cue) => {
+    const x = clamp(cue.time / Math.max(duration, 0.001), 0, 1) * width;
+    context.strokeStyle = "rgba(255, 196, 87, 0.86)";
+    context.lineWidth = Math.max(1, 1.5 * ratio);
+    context.setLineDash([4 * ratio, 4 * ratio]);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+    context.setLineDash([]);
+    context.fillStyle = "rgba(255, 196, 87, 0.92)";
+    context.font = `${Math.round(10 * ratio)}px system-ui, sans-serif`;
+    context.textBaseline = "top";
+    context.fillText(cue.name, x + 4 * ratio, 4 * ratio);
+  });
+  if (Number.isFinite(currentTime)) {
+    const x = clamp(currentTime / Math.max(duration, 0.001), 0, 1) * width;
+    context.strokeStyle = "rgba(255, 255, 255, 0.96)";
+    context.lineWidth = Math.max(1, 1.2 * ratio);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+  }
+}
+
+function cueTimeFromCanvasEvent(event) {
+  const rect = elements.liveSpectrum.getBoundingClientRect();
+  const progress = clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+  return progress * Math.max(trainingCapture.duration, 0.001);
+}
+
+function addTrainingCue(time) {
+  if (!canEditTrainingScene()) return;
+  const cueTime = roundNumber(clamp(time, 0, trainingCapture.duration), 4);
+  const frame = findTrainingFrameAt(cueTime);
+  const rhythmSplit = estimateFastestRhythmSplit(cueTime);
+  const component = rhythmSplit.fastest_component ?? dominantComponentName(frame?.component_lanes) ?? "sound";
+  const cue = {
+    id: `cue_${String(trainingCapture.cues.length + 1).padStart(3, "0")}`,
+    name: `${component}_cue_${String(trainingCapture.cues.length + 1).padStart(2, "0")}`,
+    time: cueTime,
+    probability: 0.9,
+    split_type: "sound_scene_split",
+    sample_category: frame?.sample_category ?? null,
+    scene_category: frame?.scene_category ?? null,
+    dominant_component: component,
+    fastest_component_bpm: rhythmSplit.fastest_component_bpm,
+    rhythm_split: rhythmSplit,
+  };
+  trainingCapture.cues.push(cue);
+  trainingCapture.cues.sort((left, right) => left.time - right.time);
+  selectedTrainingCueId = cue.id;
+  seekToSliderValue((cueTime / Math.max(trainingCapture.duration, 0.001)) * 1000).catch((error) => {
+    setState("Cue seek error");
+    logEvent(error.message);
+  });
+  updateTrainingSummary();
+  redrawTrainingReview();
+  logEvent(`cue ${cue.name} ${formatTime(Math.floor(cueTime))}`);
+}
+
+function selectedTrainingCue() {
+  return trainingCapture.cues.find((cue) => cue.id === selectedTrainingCueId) ?? null;
+}
+
+function updateCueEditor() {
+  const cue = selectedTrainingCue();
+  const enabled = canEditTrainingScene() && Boolean(cue);
+  elements.cueNameInput.disabled = !enabled;
+  elements.cueProbabilityInput.disabled = !enabled;
+  elements.cueNameInput.value = cue?.name ?? "";
+  elements.cueProbabilityInput.value = String(cue?.probability ?? 0.9);
+  elements.cueNameInput.placeholder = enabled ? "cue name" : "no cue";
+}
+
+function estimateFastestRhythmSplit(time) {
+  const windowStart = Math.max(0, time - 3);
+  const windowEnd = Math.min(trainingCapture.duration, time + 3);
+  const frames = trainingCapture.frames.filter((frame) => frame.time >= windowStart && frame.time <= windowEnd);
+  const laneStats = componentLaneNames.map((name) => {
+    const peaks = componentPeaks(frames, name);
+    const bpm = bpmFromPeaks(peaks);
+    return { component: name, bpm, peaks: peaks.length };
+  }).filter((stat) => stat.bpm);
+  laneStats.sort((left, right) => right.bpm - left.bpm);
+  const fastest = laneStats[0];
+  const baseInterval = musicalClock.interval || (fastest?.bpm ? 60 / fastest.bpm : null);
+  return {
+    fastest_component: fastest?.component ?? null,
+    fastest_component_bpm: fastest ? roundNumber(fastest.bpm, 2) : null,
+    base_interval_seconds: baseInterval ? roundNumber(baseInterval, 4) : null,
+    split_reason: fastest
+      ? `${fastest.component} pulses faster than the global groove`
+      : "manual split without enough component peaks",
+    candidate_components: laneStats.map((stat) => ({
+      component: stat.component,
+      bpm: roundNumber(stat.bpm, 2),
+      peaks: stat.peaks,
+    })),
+  };
+}
+
+function componentPeaks(frames, component) {
+  const peaks = [];
+  for (let index = 1; index < frames.length - 1; index += 1) {
+    const previous = frames[index - 1].component_lanes?.[component] ?? 0;
+    const current = frames[index].component_lanes?.[component] ?? 0;
+    const next = frames[index + 1].component_lanes?.[component] ?? 0;
+    if (current > 0.38 && current >= previous * 1.08 && current >= next * 1.08) {
+      const lastPeak = peaks.at(-1);
+      if (!lastPeak || frames[index].time - lastPeak > 0.16) {
+        peaks.push(frames[index].time);
+      }
+    }
+  }
+  return peaks;
+}
+
+function bpmFromPeaks(peaks) {
+  if (peaks.length < 2) return null;
+  const intervals = [];
+  for (let index = 0; index < peaks.length - 1; index += 1) {
+    const interval = peaks[index + 1] - peaks[index];
+    if (interval >= 0.12 && interval <= 2.0) intervals.push(interval);
+  }
+  if (!intervals.length) return null;
+  const mean = average(intervals);
+  return mean > 0 ? 60 / mean : null;
+}
+
+function dominantComponentName(componentLanes) {
+  if (!componentLanes) return null;
+  let strongest = componentLaneNames[0];
+  componentLaneNames.forEach((name) => {
+    if ((componentLanes[name] ?? 0) > (componentLanes[strongest] ?? 0)) strongest = name;
+  });
+  return strongest;
+}
+
+function redrawTrainingReview() {
+  if (!trainingReviewAvailable()) return;
+  const frame = findTrainingFrameAt(currentPlaybackTime()) ?? trainingCapture.frames.at(-1);
+  drawComponentLanes(frame?.component_lanes ?? null, currentPlaybackTime());
 }
 
 async function seekToSliderValue(value) {
@@ -1792,6 +1965,7 @@ async function seekToSliderValue(value) {
   if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length) {
     const time = (Number(value) / 1000) * trainingCapture.duration;
     applyTrainingReviewFrame(time);
+    redrawTrainingReview();
     updatePlayerTime();
     return;
   }
@@ -1832,6 +2006,7 @@ function updateTrainingEditState() {
   document.body.classList.toggle("is-training-edit", editable);
   elements.saveAnnotationButton.disabled = !editable;
   elements.clearTrainingLightsButton.disabled = !editable;
+  updateCueEditor();
 }
 
 function selectedTrainingDuration() {
@@ -1844,11 +2019,13 @@ function beginTrainingCapture(source) {
   trainingCapture = {
     active: true,
     frames: [],
+    cues: [],
     duration: selectedTrainingDuration(),
     reviewTime: 0,
     startedAt: audioContext?.currentTime ?? 0,
     source,
   };
+  selectedTrainingCueId = null;
   elements.seekSlider.disabled = true;
   elements.durationLabel.textContent = formatTime(trainingCapture.duration);
   updateTrainingSummary();
@@ -1889,6 +2066,7 @@ function captureTrainingFrame(reading) {
   if (previous && time - previous.time < 0.18) return;
   const category = reading.sample_category ?? categoryForEnergy(reading.energy ?? 0);
   const sceneChanged = updateCategoryScene(category);
+  const componentLanes = normalizeComponentLanes(reading.component_lanes);
   const frame = {
     time,
     source: trainingCapture.source ?? inputMode,
@@ -1901,8 +2079,9 @@ function captureTrainingFrame(reading) {
     energy: roundNumber(reading.energy ?? 0, 4),
     energy_trend: energyTrend(reading.energy_delta ?? ((reading.energy ?? 0) - previousEnergy)),
     spectral_flux: roundNumber(reading.spectral_flux ?? 0, 4),
-    component_lanes: normalizeComponentLanes(reading.component_lanes),
-    dominant_component: strongestComponentLane(reading.component_lanes),
+    component_lanes: componentLanes,
+    dominant_component: strongestComponentLane(componentLanes),
+    rhythm_split: estimateFastestRhythmSplit(time),
     clock_source: musicalClock.source,
   };
   trainingCapture.frames.push(frame);
@@ -1962,6 +2141,9 @@ function applyTrainingReviewFrame(time) {
   elements.currentIntent.textContent = frame.intent ?? "-";
   elements.currentGesture.textContent = frame.dominant_component ?? frame.clock_source ?? "-";
   elements.currentEnergyTrend.textContent = frame.energy_trend ?? "-";
+  const cue = findTrainingCueAt(trainingCapture.reviewTime);
+  if (cue) selectedTrainingCueId = cue.id;
+  updateCueEditor();
   updateMeter(frame.energy ?? 0);
   return true;
 }
@@ -2042,12 +2224,19 @@ function saveTrainingAnnotation() {
   const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
   const rhythmEvent = inputMode === "timeline" ? findTimelineRhythmEventAt(time) : null;
   const captureFrame = findTrainingFrameAt(time);
+  const cue = findTrainingCueAt(time);
   const annotation = {
     id: `mark_${String(trainingAnnotations.length + 1).padStart(3, "0")}`,
     time: roundNumber(time, 4),
     input_mode: inputMode,
     track: loadedTimelineName || loadedFileName || null,
     sound_sample: normalizeSampleTag(elements.sampleTagInput.value),
+    cue: cue ? {
+      id: cue.id,
+      name: cue.name,
+      probability: cue.probability,
+      rhythm_split: cue.rhythm_split,
+    } : null,
     brain: {
       scene: sceneEvent?.scene ?? captureFrame?.scene_category ?? null,
       sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? captureFrame?.sample_category ?? null,
@@ -2094,8 +2283,9 @@ function normalizeSampleTag(value) {
 
 function updateTrainingSummary() {
   const frameText = trainingCapture.frames.length ? `, ${trainingCapture.frames.length} frames` : "";
+  const cueText = trainingCapture.cues.length ? `, ${trainingCapture.cues.length} cues` : "";
   const timeText = trainingCapture.active ? `, recording ${formatTime(trainingCapture.duration)}` : "";
-  elements.trainingSummary.textContent = `${trainingAnnotations.length} marks${frameText}${timeText}`;
+  elements.trainingSummary.textContent = `${trainingAnnotations.length} marks${frameText}${cueText}${timeText}`;
 }
 
 function findTrainingFrameAt(time) {
@@ -2103,6 +2293,15 @@ function findTrainingFrameAt(time) {
   for (const frame of trainingCapture.frames) {
     if (frame.time > time) break;
     current = frame;
+  }
+  return current;
+}
+
+function findTrainingCueAt(time) {
+  let current = null;
+  for (const cue of trainingCapture.cues) {
+    if (cue.time > time) break;
+    current = cue;
   }
   return current;
 }
@@ -2116,6 +2315,7 @@ function downloadTrainingAnnotations() {
       source: trainingCapture.source,
       duration: trainingCapture.duration,
       frames: trainingCapture.frames,
+      cues: trainingCapture.cues,
     },
     annotations: trainingAnnotations,
   };
@@ -2557,9 +2757,25 @@ elements.trackOverview.addEventListener("click", (event) => {
   });
 });
 
+elements.liveSpectrum.addEventListener("click", (event) => {
+  if (!trainingReviewAvailable()) return;
+  const time = cueTimeFromCanvasEvent(event);
+  seekToSliderValue((time / Math.max(trainingCapture.duration, 0.001)) * 1000).catch((error) => {
+    setState("Seek error");
+    logEvent(error.message);
+  });
+});
+
+elements.liveSpectrum.addEventListener("contextmenu", (event) => {
+  if (!canEditTrainingScene()) return;
+  event.preventDefault();
+  addTrainingCue(cueTimeFromCanvasEvent(event));
+});
+
 window.addEventListener("resize", () => {
   overviewCacheCanvas = null;
   drawTrackOverview();
+  redrawTrainingReview();
   updatePlayerTime();
 });
 
@@ -2601,6 +2817,21 @@ elements.downloadAnnotationsButton.addEventListener("click", () => {
 
 elements.clearTrainingLightsButton.addEventListener("click", () => {
   clearTrainingLights();
+});
+
+elements.cueNameInput.addEventListener("input", () => {
+  const cue = selectedTrainingCue();
+  if (!cue) return;
+  cue.name = elements.cueNameInput.value.trim() || cue.id;
+  updateTrainingSummary();
+  redrawTrainingReview();
+});
+
+elements.cueProbabilityInput.addEventListener("input", () => {
+  const cue = selectedTrainingCue();
+  if (!cue) return;
+  cue.probability = roundNumber(clamp(Number(elements.cueProbabilityInput.value), 0, 1), 3);
+  elements.cueProbabilityInput.value = String(cue.probability);
 });
 
 elements.resetLayoutButton.addEventListener("click", () => {

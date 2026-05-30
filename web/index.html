@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260530-11">
+    <link rel="stylesheet" href="styles.css?v=20260530-13">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -62,6 +62,10 @@
       .stage-panel { display: grid; grid-template-rows: auto auto minmax(420px, 1fr); gap: 10px; padding: 22px; min-width: 0; min-height: 560px; }
       .stage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
       .stage-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+      .cue-editor { display: grid; grid-template-columns: minmax(130px, 1fr) 72px; gap: 8px; min-width: 220px; }
+      .cue-editor label { min-width: 0; width: auto; }
+      .cue-editor input { min-height: 34px; width: 100%; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); }
+      .cue-editor input:disabled { color: #6e777c; background: #15191b; }
       .stage-toolbar h2 { margin: 0; font-size: 16px; }
       .training-summary { min-height: 24px; color: var(--muted); font-size: 12px; }
       .stage { position: relative; overflow: hidden; min-height: 420px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px), radial-gradient(circle at 50% 8%, rgba(79,195,177,.12), transparent 34%), #0c0f10; background-size: 48px 48px, 48px 48px, auto, auto; }
@@ -263,6 +267,16 @@
               <h2>Mini Light Tester</h2>
               <p>Drag lights to sketch a real setup</p>
             </div>
+            <div class="cue-editor" aria-label="Cue editor">
+              <label>
+                Cue
+                <input id="cueNameInput" type="text" placeholder="no cue" disabled>
+              </label>
+              <label>
+                Prob.
+                <input id="cueProbabilityInput" type="number" min="0" max="1" step="0.05" value="0.9" disabled>
+              </label>
+            </div>
             <div class="stage-actions">
               <button id="saveAnnotationButton" type="button">Save mark</button>
               <button id="downloadAnnotationsButton" type="button">Download</button>
@@ -288,6 +302,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260530-11"></script>
+    <script src="app.js?v=20260530-13"></script>
   </body>
 </html>

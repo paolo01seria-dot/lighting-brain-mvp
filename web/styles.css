@@ -452,6 +452,33 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.cue-editor {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 72px;
+  gap: 8px;
+  min-width: 220px;
+}
+
+.cue-editor label {
+  min-width: 0;
+  width: auto;
+}
+
+.cue-editor input {
+  min-height: 34px;
+  width: 100%;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.cue-editor input:disabled {
+  color: #6e777c;
+  background: #15191b;
+}
+
 .training-summary {
   min-height: 24px;
   color: var(--muted);

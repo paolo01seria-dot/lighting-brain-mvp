@@ -117,13 +117,21 @@ p {
   display: none !important;
 }
 
-.mode-timeline .source-timeline-control {
+.output-timeline .source-timeline-control {
   display: flex !important;
+}
+
+.output-timeline .source-file-control {
+  display: none !important;
 }
 
 .is-mic-mode .source-mic-panel,
 .is-mic-mode .device-control {
   display: block !important;
+}
+
+.is-training .mini-player.source-file-panel {
+  display: grid !important;
 }
 
 label,
@@ -238,6 +246,12 @@ select {
   width: 22px;
   height: 22px;
   accent-color: var(--accent);
+}
+
+.training-duration-control {
+  min-width: 96px;
+  width: 96px;
+  flex-basis: 96px;
 }
 
 .sample-control {
@@ -699,6 +713,11 @@ button:disabled {
     flex: 0 0 78px;
     min-width: 78px;
     width: 78px;
+  }
+
+  .training-duration-control {
+    flex: 0 0 96px;
+    min-width: 96px;
   }
 
   .sample-control {

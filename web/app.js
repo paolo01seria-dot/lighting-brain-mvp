@@ -54,6 +54,7 @@ const elements = {
   currentTimeLabel: document.querySelector("#currentTimeLabel"),
   durationLabel: document.querySelector("#durationLabel"),
   trainingMode: document.querySelector("#trainingMode"),
+  trainingDuration: document.querySelector("#trainingDuration"),
   sampleTagInput: document.querySelector("#sampleTagInput"),
   currentSampleCategory: document.querySelector("#currentSampleCategory"),
   currentSceneCategory: document.querySelector("#currentSceneCategory"),
@@ -122,6 +123,14 @@ let lightStates = [];
 let positions = [];
 let dragging = null;
 let trainingAnnotations = [];
+let trainingCapture = {
+  active: false,
+  frames: [],
+  duration: 0,
+  reviewTime: 0,
+  startedAt: 0,
+  source: null,
+};
 
 function buildLights(count, keepPositions = true) {
   const nextCount = clamp(Math.round(count), 1, 32);
@@ -386,7 +395,7 @@ async function loadTimelineFile(file) {
   timelineCurrentRhythmEvent = null;
   inputMode = "timeline";
   document.body.classList.remove("is-mic-mode");
-  elements.inputSource.value = "timeline";
+  document.body.classList.add("mode-timeline");
   elements.trackLabel.textContent = loadedTimelineName;
   elements.playButton.textContent = "Play";
   elements.playButton.disabled = false;
@@ -440,6 +449,7 @@ async function playAudio() {
   setState("Playing");
   elements.playButton.textContent = "Pause";
   elements.stopButton.disabled = false;
+  beginTrainingCapture("file");
   animate();
 }
 
@@ -454,6 +464,7 @@ function pauseAudio() {
   if (isTrainingMode()) {
     blackoutAutoLights();
   }
+  stopTrainingCapture("paused");
   updatePlayerTime();
 }
 
@@ -479,6 +490,7 @@ function stopPlayback(options = {}) {
     }
   }
   isPlaying = false;
+  stopTrainingCapture(resetPosition ? "stopped" : "paused");
   if (resetPosition) {
     pausedAt = 0;
   }
@@ -528,6 +540,7 @@ async function playTimeline() {
   setState("Timeline playing");
   elements.playButton.textContent = "Pause";
   elements.stopButton.disabled = false;
+  beginTrainingCapture("timeline_json");
   animateTimeline();
 }
 
@@ -541,6 +554,7 @@ function pauseTimeline() {
   if (isTrainingMode()) {
     blackoutAutoLights();
   }
+  stopTrainingCapture("paused");
   updatePlayerTime();
 }
 
@@ -549,6 +563,7 @@ function stopTimelinePlayback(options = {}) {
   cancelAnimationFrame(timelineAnimationFrame);
   if (inputMode === "timeline") {
     isPlaying = false;
+    stopTrainingCapture(resetPosition ? "stopped" : "paused");
     if (resetPosition) {
       timelinePausedAt = 0;
       timelineNextIndex = 0;
@@ -584,10 +599,19 @@ function animateTimeline() {
   }
 
   const energy = getTimelinePreviewEnergy(time);
+  captureTrainingFrame({
+    time,
+    energy,
+    energy_delta: energy - previousEnergy,
+    spectral_flux: 0,
+    sample_category: timelineCurrentRhythmEvent?.sample_category ?? timelineCurrentEvent?.sample_category,
+  });
   updateMeter(energy);
   renderLights();
   updatePlayerTime();
+  previousEnergy = energy;
 
+  if (maybeFinishTrainingCapture(time)) return;
   if (time >= timelineDuration) {
     stopTimelinePlayback({ resetPosition: true });
     return;
@@ -610,12 +634,22 @@ function animate() {
   const rms = getRms(timeData);
   smoothedEnergy = smoothedEnergy * 0.32 + rawEnergy * 0.68;
   const energy = Math.min(1, smoothedEnergy * profile.pulse);
+  const time = audioContext ? audioContext.currentTime - startedAt : 0;
+  const energyDeltaForCapture = energy - previousEnergy;
   drawLiveSpectrum(frequencyData);
   updateLights(frequencyData, energy, rms, profile, spectralFlux);
+  captureTrainingFrame({
+    time,
+    energy,
+    energy_delta: energyDeltaForCapture,
+    spectral_flux: spectralFlux,
+    sample_category: categoryForEnergy(energy),
+  });
   updateMeter(energy);
   updatePlayerTime();
   maybeLogSignal(energy);
   previousSpectrum = new Uint8Array(frequencyData);
+  if (maybeFinishTrainingCapture(time)) return;
 
   animationFrame = requestAnimationFrame(animate);
 }
@@ -1090,6 +1124,13 @@ function handleLiveAudioFrame(frame) {
   drawLiveSpectrum(frequencyData);
   if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment" || frame.energy_drop > 0.18) {
     blackoutLights();
+    captureTrainingFrame({
+      time,
+      energy,
+      energy_delta: Number(frame.energy_delta ?? 0),
+      spectral_flux: Number(frame.spectral_flux ?? 0),
+      sample_category: frame.sample_category ?? "silence_or_pause",
+    });
     updateMeter(energy);
     updatePlayerTime();
     maybeLogLiveFrame(frame);
@@ -1100,13 +1141,22 @@ function handleLiveAudioFrame(frame) {
       high: 0,
       rms,
     });
+    maybeFinishTrainingCapture(time);
     return;
   }
   updateLights(frequencyData, energy, rms, profile, Number(frame.spectral_flux ?? 0));
+  captureTrainingFrame({
+    time,
+    energy,
+    energy_delta: Number(frame.energy_delta ?? 0),
+    spectral_flux: Number(frame.spectral_flux ?? 0),
+    sample_category: frame.sample_category,
+  });
   updateMeter(energy);
   updatePlayerTime();
   maybeLogLiveFrame(frame);
   previousSpectrum = new Uint8Array(frequencyData);
+  maybeFinishTrainingCapture(time);
 }
 
 function maybeLogLiveFrame(frame) {
@@ -1337,7 +1387,10 @@ function currentPlaybackTime() {
       ? clamp(audioContext.currentTime - timelineStartedAt, 0, timelineDuration)
       : clamp(timelinePausedAt, 0, timelineDuration);
   }
-  if (inputMode === "mic_device") {
+  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length) {
+    return clamp(trainingCapture.reviewTime, 0, trainingCapture.duration);
+  }
+  if (inputMode === "mic_device" || inputMode === "system_audio") {
     return audioContext && isPlaying ? Math.max(0, audioContext.currentTime - startedAt) : 0;
   }
   if (!hasLoadedAudio()) return 0;
@@ -1349,11 +1402,17 @@ function currentPlaybackTime() {
 
 function updatePlayerTime() {
   const current = currentPlaybackTime();
-  const duration = inputMode === "mic_device" ? 0 : getAudioDuration();
+  const liveReview = (inputMode === "mic_device" || inputMode === "system_audio") && trainingCapture.frames.length;
+  const duration = liveReview ? trainingCapture.duration : inputMode === "mic_device" || inputMode === "system_audio" ? 0 : getAudioDuration();
   elements.currentTimeLabel.textContent = formatTime(Math.floor(current));
-  elements.durationLabel.textContent = inputMode === "mic_device" ? "live" : formatTime(Math.floor(duration));
+  elements.durationLabel.textContent = (inputMode === "mic_device" || inputMode === "system_audio") && !liveReview ? "live" : formatTime(Math.floor(duration));
   drawOverviewPlayhead(current, duration);
   updateTrainingReadout(current);
+  if (liveReview && !isPlaying) {
+    elements.seekSlider.disabled = false;
+    elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
+    return;
+  }
   if (inputMode === "timeline") {
     elements.seekSlider.disabled = !timelineEvents.length;
     elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
@@ -1369,6 +1428,9 @@ function updatePlayerTime() {
 }
 
 function updateTrainingReadout(time) {
+  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && applyTrainingReviewFrame(time)) {
+    return;
+  }
   const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
   const rhythmEvent = inputMode === "timeline" ? findTimelineRhythmEventAt(time) : null;
   const metadata = sceneEvent?.metadata ?? {};
@@ -1593,6 +1655,12 @@ async function seekToSliderValue(value) {
     }
     return;
   }
+  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length) {
+    const time = (Number(value) / 1000) * trainingCapture.duration;
+    applyTrainingReviewFrame(time);
+    updatePlayerTime();
+    return;
+  }
   if (!hasLoadedAudio() || inputMode !== "file") return;
   const wasPlaying = isPlaying;
   pausedAt = (Number(value) / 1000) * getAudioDuration();
@@ -1619,6 +1687,114 @@ function findNextTimelineRhythmIndex(time) {
 
 function isTrainingMode() {
   return Boolean(elements.trainingMode?.checked);
+}
+
+function selectedTrainingDuration() {
+  return Math.max(1, Number(elements.trainingDuration?.value ?? 30));
+}
+
+function beginTrainingCapture(source) {
+  if (!isTrainingMode()) return;
+  trainingCapture = {
+    active: true,
+    frames: [],
+    duration: selectedTrainingDuration(),
+    reviewTime: 0,
+    startedAt: audioContext?.currentTime ?? 0,
+    source,
+  };
+  elements.seekSlider.disabled = true;
+  elements.durationLabel.textContent = formatTime(trainingCapture.duration);
+  updateTrainingSummary();
+  logEvent(`training capture ${formatTime(trainingCapture.duration)}`);
+}
+
+function stopTrainingCapture(reason = "stopped") {
+  if (!trainingCapture.active) return;
+  trainingCapture.active = false;
+  trainingCapture.reviewTime = 0;
+  elements.seekSlider.disabled = !trainingCapture.frames.length;
+  updateTrainingSummary();
+  logEvent(`training ${reason}: ${trainingCapture.frames.length} frames`);
+}
+
+function maybeFinishTrainingCapture(time) {
+  if (!trainingCapture.active) return false;
+  if (time < trainingCapture.duration) return false;
+  stopTrainingCapture("complete");
+  if (inputMode === "mic_device") {
+    stopDeviceInput();
+  } else if (inputMode === "system_audio") {
+    stopLiveAudio();
+  } else if (inputMode === "timeline") {
+    pauseTimeline();
+  } else {
+    pauseAudio();
+  }
+  return true;
+}
+
+function captureTrainingFrame(reading) {
+  if (!trainingCapture.active) return;
+  const time = roundNumber(reading.time ?? currentPlaybackTime(), 4);
+  const previous = trainingCapture.frames[trainingCapture.frames.length - 1];
+  if (previous && time - previous.time < 0.18) return;
+  const category = reading.sample_category ?? categoryForEnergy(reading.energy ?? 0);
+  const sceneChanged = updateCategoryScene(category);
+  trainingCapture.frames.push({
+    time,
+    source: trainingCapture.source ?? inputMode,
+    genre: elements.genreProfile.value,
+    sample_category: category,
+    sample_tag: normalizeSampleTag(elements.sampleTagInput.value),
+    scene_category: sceneCategoryForSample(category, sceneChanged),
+    intent: intentForSample(category, reading.energy ?? 0),
+    energy: roundNumber(reading.energy ?? 0, 4),
+    energy_trend: energyTrend(reading.energy_delta ?? ((reading.energy ?? 0) - previousEnergy)),
+    spectral_flux: roundNumber(reading.spectral_flux ?? 0, 4),
+    clock_source: musicalClock.source,
+  });
+}
+
+function sceneCategoryForSample(category, sceneChanged) {
+  const genre = elements.genreProfile.value;
+  const variant = currentSceneByCategory[category] ?? 0;
+  if (category === "high_energy_drop") return `${genre}_drop_release_${variant}`;
+  if (category === "buildup") return `${genre}_tension_rise_${variant}`;
+  if (category === "steady_bass_pulse") return `${genre}_groove_pulse_${variant}`;
+  if (category === "stop_music_moment" || category === "silence_or_pause") return "blackout_or_freeze";
+  return sceneChanged ? `${genre}_ambient_shift_${variant}` : `${genre}_ambient_hold`;
+}
+
+function intentForSample(category, energy) {
+  if (category === "high_energy_drop") return "release_energy";
+  if (category === "buildup") return "increase_tension";
+  if (category === "steady_bass_pulse") return "keep_groove_visible";
+  if (category === "stop_music_moment" || category === "silence_or_pause") return "emphasize_stop";
+  return energy > 0.2 ? "support_texture" : "create_space";
+}
+
+function energyTrend(delta) {
+  if (delta > 0.055) return "rising";
+  if (delta < -0.055) return "falling";
+  return "stable";
+}
+
+function applyTrainingReviewFrame(time) {
+  if (trainingCapture.active || !trainingCapture.frames.length) return false;
+  trainingCapture.reviewTime = clamp(time, 0, trainingCapture.duration);
+  let frame = trainingCapture.frames[0];
+  for (const candidate of trainingCapture.frames) {
+    if (candidate.time > trainingCapture.reviewTime) break;
+    frame = candidate;
+  }
+  elements.currentSampleCategory.textContent = frame.sample_category ?? "-";
+  elements.currentSceneCategory.textContent = frame.scene_category ?? "-";
+  elements.currentIntent.textContent = frame.intent ?? "-";
+  elements.currentGesture.textContent = frame.clock_source ?? "-";
+  elements.currentEnergyTrend.textContent = frame.energy_trend ?? "-";
+  updateMeter(frame.energy ?? 0);
+  return true;
 }
 
 function cycleTrainingLight(index, direction = 1) {
@@ -1694,6 +1870,7 @@ function saveTrainingAnnotation() {
   const time = currentPlaybackTime();
   const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
   const rhythmEvent = inputMode === "timeline" ? findTimelineRhythmEventAt(time) : null;
+  const captureFrame = findTrainingFrameAt(time);
   const annotation = {
     id: `mark_${String(trainingAnnotations.length + 1).padStart(3, "0")}`,
     time: roundNumber(time, 4),
@@ -1701,10 +1878,11 @@ function saveTrainingAnnotation() {
     track: loadedTimelineName || loadedFileName || null,
     sound_sample: normalizeSampleTag(elements.sampleTagInput.value),
     brain: {
-      scene: sceneEvent?.scene ?? null,
-      sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? null,
-      intent: sceneEvent?.intent ?? null,
-      rhythm_gesture: rhythmEvent?.gesture ?? null,
+      scene: sceneEvent?.scene ?? captureFrame?.scene_category ?? null,
+      sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? captureFrame?.sample_category ?? null,
+      genre_affinity: captureFrame?.genre ?? elements.genreProfile.value,
+      intent: sceneEvent?.intent ?? captureFrame?.intent ?? null,
+      rhythm_gesture: rhythmEvent?.gesture ?? captureFrame?.clock_source ?? null,
       metadata: sceneEvent?.metadata ?? null,
     },
     desired_lights: lightStates.map((state, index) => {
@@ -1744,7 +1922,18 @@ function normalizeSampleTag(value) {
 }
 
 function updateTrainingSummary() {
-  elements.trainingSummary.textContent = `${trainingAnnotations.length} marks`;
+  const frameText = trainingCapture.frames.length ? `, ${trainingCapture.frames.length} frames` : "";
+  const timeText = trainingCapture.active ? `, recording ${formatTime(trainingCapture.duration)}` : "";
+  elements.trainingSummary.textContent = `${trainingAnnotations.length} marks${frameText}${timeText}`;
+}
+
+function findTrainingFrameAt(time) {
+  let current = null;
+  for (const frame of trainingCapture.frames) {
+    if (frame.time > time) break;
+    current = frame;
+  }
+  return current;
 }
 
 function downloadTrainingAnnotations() {
@@ -1752,6 +1941,11 @@ function downloadTrainingAnnotations() {
     version: 1,
     created_at: new Date().toISOString(),
     track: loadedTimelineName || loadedFileName || null,
+    captured_training: {
+      source: trainingCapture.source,
+      duration: trainingCapture.duration,
+      frames: trainingCapture.frames,
+    },
     annotations: trainingAnnotations,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -1862,6 +2056,12 @@ function setInputMode(mode) {
   updatePlayerTime();
 }
 
+function updateOutputMode() {
+  const selected = elements.outputTarget.options[elements.outputTarget.selectedIndex].text;
+  elements.outputLabel.textContent = selected;
+  document.body.classList.toggle("output-timeline", elements.outputTarget.value === "timeline_json");
+}
+
 async function refreshAudioDevices() {
   if (!navigator.mediaDevices?.enumerateDevices) {
     elements.audioDevice.innerHTML = '<option value="">Audio devices unavailable</option>';
@@ -1967,6 +2167,7 @@ async function startLiveAudio() {
   elements.trackLabel.textContent = "Python Live Audio";
   setState("Live listening");
   logEvent("python live audio");
+  beginTrainingCapture("python_live_audio");
   liveEventSource.onmessage = (event) => {
     handleLiveAudioFrame(JSON.parse(event.data));
   };
@@ -1995,6 +2196,7 @@ function stopLiveAudio(resetUi = true) {
       updateMeter(0);
       updatePlayerTime();
     }
+    stopTrainingCapture("stopped");
   }
 }
 
@@ -2029,6 +2231,7 @@ async function startDeviceInput() {
   elements.trackLabel.textContent = "Mic Device";
   setState("Listening");
   await refreshAudioDevices();
+  beginTrainingCapture("mic_device");
   animate();
   logEvent("mic device live");
 }
@@ -2054,6 +2257,7 @@ function stopDeviceInput(resetUi = true) {
       updateMeter(0);
       updatePlayerTime();
     }
+    stopTrainingCapture("stopped");
   }
 }
 
@@ -2141,7 +2345,8 @@ elements.seekSlider.addEventListener("input", () => {
 });
 
 elements.trackOverview.addEventListener("click", (event) => {
-  if ((!hasLoadedAudio() || inputMode !== "file") && inputMode !== "timeline") return;
+  const liveReview = (inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length;
+  if ((!hasLoadedAudio() || inputMode !== "file") && inputMode !== "timeline" && !liveReview) return;
   const rect = elements.trackOverview.getBoundingClientRect();
   const progress = clamp((event.clientX - rect.left) / rect.width, 0, 1);
   seekToSliderValue(progress * 1000).catch((error) => {
@@ -2157,9 +2362,8 @@ window.addEventListener("resize", () => {
 });
 
 elements.outputTarget.addEventListener("change", () => {
-  const selected = elements.outputTarget.options[elements.outputTarget.selectedIndex].text;
-  elements.outputLabel.textContent = selected;
-  logEvent(`output ${selected}`);
+  updateOutputMode();
+  logEvent(`output ${elements.outputLabel.textContent}`);
 });
 
 elements.genreProfile.addEventListener("change", () => {
@@ -2177,6 +2381,10 @@ elements.differentiation.addEventListener("input", () => {
 
 elements.trainingMode.addEventListener("change", () => {
   document.body.classList.toggle("is-training", isTrainingMode());
+  if (!isTrainingMode()) {
+    stopTrainingCapture("off");
+  }
+  updatePlayerTime();
   logEvent(isTrainingMode() ? "training on" : "training off");
 });
 
@@ -2241,6 +2449,7 @@ function stopDrag(event) {
 }
 
 buildLights(Number(elements.lightCount.value), false);
+updateOutputMode();
 setInputMode(elements.inputSource.value);
 drawTrackOverview();
 updateTrainingSummary();

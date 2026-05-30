@@ -35,6 +35,7 @@ const elements = {
   audioFile: document.querySelector("#audioFile"),
   timelineFile: document.querySelector("#timelineFile"),
   audioDevice: document.querySelector("#audioDevice"),
+  audioDeviceSummary: document.querySelector("#audioDeviceSummary"),
   trackLabel: document.querySelector("#trackLabel"),
   outputTarget: document.querySelector("#outputTarget"),
   outputLabel: document.querySelector("#outputLabel"),
@@ -2085,6 +2086,7 @@ async function refreshAudioDevices() {
       elements.audioDevice.appendChild(option);
     });
     elements.audioDevice.value = previous;
+    updateAudioDeviceSummary("MacBook microphone");
   } catch (error) {
     logEvent(`mic list ${error.message}`);
   }
@@ -2118,26 +2120,38 @@ async function refreshLiveAudioDevices() {
     });
     if (loopbackDevice) {
       elements.audioDevice.value = String(loopbackDevice.index);
+      updateAudioDeviceSummary(normalizeLiveDeviceName(loopbackDevice.name, loopbackDevice.index));
       setState("System audio ready");
       logEvent(`system loopback: ${loopbackDevice.name}`);
     } else {
+      updateAudioDeviceSummary("System loopback missing");
       setState("No system loopback");
       logEvent("install/select BlackHole to hear Spotify/Rekordbox");
     }
   } catch (_error) {
+    updateAudioDeviceSummary("Python server offline");
     setState("Start Python live server");
     logEvent("run: lighting-live-audio");
+  }
+}
+
+function updateAudioDeviceSummary(value) {
+  if (elements.audioDeviceSummary) {
+    elements.audioDeviceSummary.value = value;
+    elements.audioDeviceSummary.textContent = value;
   }
 }
 
 function selectedLiveAudioDevice() {
   const selectedOption = elements.audioDevice.selectedOptions[0];
   if (selectedOption && isSystemLoopbackDevice({ name: selectedOption.textContent })) {
+    updateAudioDeviceSummary(selectedOption.textContent);
     return elements.audioDevice.value;
   }
   const loopbackOption = [...elements.audioDevice.options].find((option) => isSystemLoopbackDevice({ name: option.textContent }));
   if (loopbackOption) {
     elements.audioDevice.value = loopbackOption.value;
+    updateAudioDeviceSummary(loopbackOption.textContent);
     return loopbackOption.value;
   }
   return elements.audioDevice.value || "default";

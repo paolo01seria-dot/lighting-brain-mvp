@@ -106,7 +106,8 @@ p {
 
 .source-timeline-control,
 .source-mic-panel,
-.device-control {
+.device-control,
+.audio-device-summary-control {
   display: none !important;
 }
 
@@ -125,9 +126,16 @@ p {
   display: none !important;
 }
 
-.is-mic-mode .source-mic-panel,
-.is-mic-mode .device-control {
+.is-mic-mode .source-mic-panel {
   display: block !important;
+}
+
+.is-mic-mode .device-control {
+  display: none !important;
+}
+
+.is-mic-mode .audio-device-summary-control {
+  display: grid !important;
 }
 
 .is-training .mini-player.source-file-panel {
@@ -252,6 +260,27 @@ select {
   min-width: 96px;
   width: 96px;
   flex-basis: 96px;
+}
+
+.audio-device-summary-control {
+  min-width: 180px;
+  width: 180px;
+  flex-basis: 180px;
+}
+
+.audio-device-summary-control output {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #172023;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sample-control {
@@ -718,6 +747,11 @@ button:disabled {
   .training-duration-control {
     flex: 0 0 96px;
     min-width: 96px;
+  }
+
+  .audio-device-summary-control {
+    flex: 1 1 180px;
+    min-width: 160px;
   }
 
   .sample-control {

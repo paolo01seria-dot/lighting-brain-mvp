@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260530-2">
+    <link rel="stylesheet" href="styles.css?v=20260530-8">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -33,6 +33,8 @@
       .training-switch { min-width: 84px; width: 84px; flex-basis: 84px; margin-left: 8px; }
       .training-switch input { width: 22px; height: 22px; accent-color: var(--accent); }
       .training-duration-control { min-width: 96px; width: 96px; flex-basis: 96px; }
+      .audio-device-summary-control { min-width: 180px; width: 180px; flex-basis: 180px; }
+      .audio-device-summary-control output { display: flex; min-height: 38px; align-items: center; padding: 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: #172023; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
       .sample-control { min-width: 220px; width: 220px; flex-basis: 220px; }
       .sample-control input { min-height: 38px; width: 100%; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); }
       button { padding: 0 15px; cursor: pointer; }
@@ -88,13 +90,15 @@
       .light-label { position: absolute; left: 50%; top: calc(100% + 5px); display: none; width: 84px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 9px; line-height: 1.05; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
       .is-training .light-label { display: block; }
       .is-training .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
-      .source-timeline-control, .source-mic-panel, .device-control { display: none !important; }
+      .source-timeline-control, .source-mic-panel, .device-control, .audio-device-summary-control { display: none !important; }
       .mode-timeline .source-file-control, .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .is-mic-mode .source-timeline-control { display: none !important; }
       .output-timeline .source-timeline-control { display: flex !important; }
       .output-timeline .source-file-control { display: none !important; }
-      .is-mic-mode .source-mic-panel, .is-mic-mode .device-control { display: block !important; }
+      .is-mic-mode .source-mic-panel { display: block !important; }
+      .is-mic-mode .device-control { display: none !important; }
+      .is-mic-mode .audio-device-summary-control { display: grid !important; }
       .is-training .mini-player.source-file-panel { display: grid !important; }
-      @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 1 1 calc((100% - 30px) / 4); min-width: 118px; width: auto; } .file-control { flex-basis: calc((100% - 30px) / 4); } .transport { flex: 0 0 156px; } .training-switch { flex: 0 0 78px; min-width: 78px; width: 78px; } .training-duration-control { flex: 0 0 96px; min-width: 96px; } .sample-control { flex: 1 1 220px; } .range-control { flex: 1 1 180px; } .number-control { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; gap: 8px; } }
+      @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 1 1 calc((100% - 30px) / 4); min-width: 118px; width: auto; } .file-control { flex-basis: calc((100% - 30px) / 4); } .transport { flex: 0 0 156px; } .training-switch { flex: 0 0 78px; min-width: 78px; width: 78px; } .training-duration-control { flex: 0 0 96px; min-width: 96px; } .audio-device-summary-control { flex: 1 1 180px; min-width: 160px; } .sample-control { flex: 1 1 220px; } .range-control { flex: 1 1 180px; } .number-control { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; gap: 8px; } }
     </style>
   </head>
   <body>
@@ -155,6 +159,11 @@
             <select id="audioDevice" disabled>
               <option value="">Default audio input</option>
             </select>
+          </label>
+
+          <label class="audio-device-summary-control">
+            <span>Audio Device</span>
+            <output id="audioDeviceSummary">Auto</output>
           </label>
 
           <label>
@@ -279,6 +288,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260530-6"></script>
+    <script src="app.js?v=20260530-8"></script>
   </body>
 </html>

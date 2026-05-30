@@ -1815,6 +1815,10 @@ function setInputMode(mode) {
   const timelineMode = mode === "timeline";
   const liveMode = mode === "system_audio";
   document.body.classList.toggle("is-mic-mode", mode === "mic_device" || liveMode);
+  document.body.classList.toggle("mode-file", fileMode);
+  document.body.classList.toggle("mode-timeline", timelineMode);
+  document.body.classList.toggle("mode-mic_device", mode === "mic_device");
+  document.body.classList.toggle("mode-system_audio", liveMode);
   elements.audioFile.disabled = !fileMode;
   elements.audioFile.closest(".file-control").classList.toggle("disabled", !fileMode);
   elements.audioDevice.disabled = mode !== "mic_device" && !liveMode;

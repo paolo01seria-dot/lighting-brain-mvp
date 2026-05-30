@@ -104,11 +104,21 @@ p {
   opacity: 0.45;
 }
 
-.is-mic-mode .source-file-panel,
-.is-mic-mode .source-file-control,
+.source-timeline-control,
 .source-mic-panel,
 .device-control {
   display: none !important;
+}
+
+.mode-timeline .source-file-control,
+.is-mic-mode .source-file-panel,
+.is-mic-mode .source-file-control,
+.is-mic-mode .source-timeline-control {
+  display: none !important;
+}
+
+.mode-timeline .source-timeline-control {
+  display: flex !important;
 }
 
 .is-mic-mode .source-mic-panel,
@@ -213,14 +223,15 @@ select {
 .transport {
   display: flex;
   gap: 8px;
-  width: 132px;
-  flex: 0 0 132px;
+  width: 156px;
+  flex: 0 0 156px;
 }
 
 .training-switch {
   min-width: 84px;
   width: 84px;
   flex-basis: 84px;
+  margin-left: 8px;
 }
 
 .training-switch input {
@@ -681,7 +692,7 @@ button:disabled {
   }
 
   .transport {
-    flex: 0 0 132px;
+    flex: 0 0 156px;
   }
 
   .training-switch {

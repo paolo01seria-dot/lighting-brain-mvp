@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260530-1">
+    <link rel="stylesheet" href="styles.css?v=20260530-2">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -29,8 +29,8 @@
       .range-control { min-width: 180px; width: 180px; flex-basis: 180px; }
       .range-control input { accent-color: var(--accent); height: 38px; }
       .range-control span { display: flex; justify-content: space-between; gap: 10px; }
-      .transport { display: flex; gap: 8px; width: 132px; flex: 0 0 132px; }
-      .training-switch { min-width: 84px; width: 84px; flex-basis: 84px; }
+      .transport { display: flex; gap: 8px; width: 156px; flex: 0 0 156px; }
+      .training-switch { min-width: 84px; width: 84px; flex-basis: 84px; margin-left: 8px; }
       .training-switch input { width: 22px; height: 22px; accent-color: var(--accent); }
       .sample-control { min-width: 220px; width: 220px; flex-basis: 220px; }
       .sample-control input { min-height: 38px; width: 100%; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--text); }
@@ -87,9 +87,11 @@
       .light-label { position: absolute; left: 50%; top: calc(100% + 5px); display: none; width: 84px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 9px; line-height: 1.05; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
       .is-training .light-label { display: block; }
       .is-training .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
-      .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .source-mic-panel, .device-control { display: none !important; }
+      .source-timeline-control, .source-mic-panel, .device-control { display: none !important; }
+      .mode-timeline .source-file-control, .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .is-mic-mode .source-timeline-control { display: none !important; }
+      .mode-timeline .source-timeline-control { display: flex !important; }
       .is-mic-mode .source-mic-panel, .is-mic-mode .device-control { display: block !important; }
-      @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 1 1 calc((100% - 30px) / 4); min-width: 118px; width: auto; } .file-control { flex-basis: calc((100% - 30px) / 4); } .transport { flex: 0 0 132px; } .training-switch { flex: 0 0 78px; min-width: 78px; width: 78px; } .sample-control { flex: 1 1 220px; } .range-control { flex: 1 1 180px; } .number-control { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; gap: 8px; } }
+      @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 1 1 calc((100% - 30px) / 4); min-width: 118px; width: auto; } .file-control { flex-basis: calc((100% - 30px) / 4); } .transport { flex: 0 0 156px; } .training-switch { flex: 0 0 78px; min-width: 78px; width: 78px; } .sample-control { flex: 1 1 220px; } .range-control { flex: 1 1 180px; } .number-control { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; gap: 8px; } }
     </style>
   </head>
   <body>
@@ -131,7 +133,7 @@
             <input id="audioFile" type="file" accept="audio/*">
           </label>
 
-          <label class="file-control">
+          <label class="file-control source-timeline-control">
             <span>Load timeline</span>
             <input id="timelineFile" type="file" accept="application/json,.json">
           </label>
@@ -260,6 +262,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260530-1"></script>
+    <script src="app.js?v=20260530-2"></script>
   </body>
 </html>

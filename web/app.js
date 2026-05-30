@@ -2100,7 +2100,7 @@ function normalizeInputDeviceName(label, index) {
 }
 
 async function refreshLiveAudioDevices() {
-  elements.audioDevice.innerHTML = '<option value="default">Default Python input</option>';
+  elements.audioDevice.innerHTML = '<option value="default">Default Python input (may be microphone)</option>';
   try {
     const response = await fetch("http://127.0.0.1:8790/devices", { cache: "no-store" });
     if (!response.ok) throw new Error(`live server ${response.status}`);
@@ -2125,6 +2125,19 @@ async function refreshLiveAudioDevices() {
     setState("Start Python live server");
     logEvent("run: lighting-live-audio");
   }
+}
+
+function selectedLiveAudioDevice() {
+  const selectedOption = elements.audioDevice.selectedOptions[0];
+  if (selectedOption && isSystemLoopbackDevice({ name: selectedOption.textContent })) {
+    return elements.audioDevice.value;
+  }
+  const loopbackOption = [...elements.audioDevice.options].find((option) => isSystemLoopbackDevice({ name: option.textContent }));
+  if (loopbackOption) {
+    elements.audioDevice.value = loopbackOption.value;
+    return loopbackOption.value;
+  }
+  return elements.audioDevice.value || "default";
 }
 
 function shouldShowLiveDevice(device) {
@@ -2155,7 +2168,7 @@ async function startLiveAudio() {
   stopPlayback({ resetPosition: false, keepLights: true });
   stopDeviceInput(false);
   stopLiveAudio(false);
-  const selectedDevice = elements.audioDevice.value || "default";
+  const selectedDevice = selectedLiveAudioDevice();
   const url = `http://127.0.0.1:8790/events?device=${encodeURIComponent(selectedDevice)}`;
   liveEventSource = new EventSource(url);
   isPlaying = true;

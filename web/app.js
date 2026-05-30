@@ -861,44 +861,21 @@ function pickGestureLights(context, count) {
 function pickActiveLights(profile, time, count, strong, sparse = false, clockSource = "none", energy = 0) {
   const interval = Math.max(musicalClock.interval ?? 0.5, 0.24);
   const pulseStep = Math.floor(time / interval);
-  const step = Math.floor(time * 3.6 * profile.chase);
+  const halfPulseStep = Math.floor(time / Math.max(interval / 2, 0.12));
   const differentiation = Number(elements.differentiation.value);
   const stableScene = differentiation >= 6;
   const weakGesture = !strong && (energy < 0.5 || clockSource === "mid_arpeggio");
-  const spread = sparse || weakGesture
-    ? 1
-    : strong
-      ? Math.min(count, profile.spread + (stableScene ? 0 : 1))
-      : Math.min(count, profile.spread);
+  const pairCount = strong && !stableScene ? 2 : 1;
 
   if (weakGesture) {
-    return musicalSingleOrPair(pulseStep, count, sparse);
+    return mirrorSwapIndexes(halfPulseStep, count, sparse);
   }
 
   if (clockSource === "high_pattern" && strong) {
     return symmetricalIndexes(pulseStep, count, Math.min(count, 4));
   }
 
-  if (profile.motion === "hits") {
-    if (strong) {
-      return uniqueIndexes([step, step + 2, step + Math.floor(count / 2)], count);
-    }
-    return uniqueIndexes([step], count);
-  }
-
-  if (profile.motion === "scan") {
-    return symmetricalIndexes(pulseStep, count, spread);
-  }
-
-  if (profile.motion === "stagger") {
-    return uniqueIndexes(Array.from({ length: spread }, (_, offset) => step + offset * 2), count);
-  }
-
-  if (profile.motion === "spiral") {
-    return uniqueIndexes(Array.from({ length: spread }, (_, offset) => step + offset * 3), count);
-  }
-
-  return uniqueIndexes(Array.from({ length: spread }, (_, offset) => step + offset), count);
+  return symmetricalIndexes(pulseStep, count, Math.min(count, pairCount * 2));
 }
 
 function musicalSingleOrPair(step, count, sparse) {
@@ -908,6 +885,13 @@ function musicalSingleOrPair(step, count, sparse) {
     return [pair[step % 2]];
   }
   return pair;
+}
+
+function mirrorSwapIndexes(step, count, sparse) {
+  if (count <= 1) return [0];
+  const pair = symmetricalPair(Math.floor(step / 2), count);
+  if (!sparse && step % 4 === 0) return pair;
+  return [pair[step % pair.length]];
 }
 
 function symmetricalIndexes(step, count, spread) {
@@ -935,13 +919,45 @@ function symmetricalPair(step, count) {
 
 function buildSymmetryPairs(count) {
   const pairs = [];
-  const topLeft = Math.max(0, Math.round(count * 0.88) % count);
-  const topRight = Math.max(0, Math.round(count * 0.12) % count);
-  pairs.push(uniqueIndexes([topLeft, topRight], count));
-  pairs.push(uniqueIndexes([Math.round(count * 0.75), Math.round(count * 0.25)], count));
-  pairs.push(uniqueIndexes([0, Math.floor(count / 2)], count));
-  pairs.push(uniqueIndexes([Math.round(count * 0.62), Math.round(count * 0.38)], count));
+  const usedKeys = new Set();
+  const candidates = positions
+    .slice(0, count)
+    .map((position, index) => ({ ...position, index, info: positionInfo(index) }))
+    .sort((left, right) => symmetrySortScore(left) - symmetrySortScore(right));
+
+  candidates.forEach((left) => {
+    const right = candidates
+      .filter((candidate) => candidate.index !== left.index)
+      .sort((a, b) => mirroredDistance(left, a) - mirroredDistance(left, b))[0];
+    if (!right) return;
+    const pair = uniqueIndexes([left.index, right.index], count);
+    const key = pair.slice().sort((a, b) => a - b).join(":");
+    if (!usedKeys.has(key)) {
+      usedKeys.add(key);
+      pairs.push(pair);
+    }
+  });
+
+  if (!pairs.length && count > 1) {
+    pairs.push(uniqueIndexes([0, Math.floor(count / 2)], count));
+  }
   return pairs.filter((pair) => pair.length > 0);
+}
+
+function symmetrySortScore(light) {
+  const zoneOrder = { up: 0, middle: 1, down: 2 };
+  const zone = zoneOrder[light.info.zone] ?? 3;
+  const side = light.info.side === "centre" ? 1 : 0;
+  const outer = light.info.outer ? 0 : 1;
+  return zone * 1000 + side * 100 + outer * 10 + light.info.rank;
+}
+
+function mirroredDistance(left, right) {
+  const mirrorX = 100 - left.x;
+  const sameZonePenalty = left.info.zone === right.info.zone ? 0 : 22;
+  const sameSidePenalty = left.info.side !== "centre" && left.info.side === right.info.side ? 18 : 0;
+  const distance = Math.abs(right.x - mirrorX) + Math.abs(right.y - left.y) * 1.35;
+  return distance + sameZonePenalty + sameSidePenalty;
 }
 
 function uniqueIndexes(values, count) {
@@ -971,8 +987,11 @@ function pickColorIndex(context, index, order) {
     return dominantBand;
   }
   const stablePhrase = differentiation >= 6 ? Math.floor(time / 16) : phrase;
-  const chaseStep = Math.floor(time * profile.chase + index + stablePhrase + order + sceneVariant + categoryOffset);
-  return profile.palette[chaseStep % profile.palette.length];
+  const interval = Math.max(musicalClock.interval ?? 0.5, 0.24);
+  const beatStep = Math.floor(time / interval);
+  const pairStep = beatStep + stablePhrase + sceneVariant + categoryOffset;
+  const pairOffset = order > 1 ? Math.floor(order / 2) : 0;
+  return profile.palette[(pairStep + pairOffset) % profile.palette.length];
 }
 
 function blackoutNonActive(activeIndexes, maxIntensity) {
@@ -1749,6 +1768,7 @@ function captureTrainingFrame(reading) {
     sample_category: category,
     sample_tag: normalizeSampleTag(elements.sampleTagInput.value),
     scene_category: sceneCategoryForSample(category, sceneChanged),
+    scene_pool_hint: scenePoolHint(category),
     intent: intentForSample(category, reading.energy ?? 0),
     energy: roundNumber(reading.energy ?? 0, 4),
     energy_trend: energyTrend(reading.energy_delta ?? ((reading.energy ?? 0) - previousEnergy)),
@@ -1760,11 +1780,22 @@ function captureTrainingFrame(reading) {
 function sceneCategoryForSample(category, sceneChanged) {
   const genre = elements.genreProfile.value;
   const variant = currentSceneByCategory[category] ?? 0;
-  if (category === "high_energy_drop") return `${genre}_drop_release_${variant}`;
-  if (category === "buildup") return `${genre}_tension_rise_${variant}`;
-  if (category === "steady_bass_pulse") return `${genre}_groove_pulse_${variant}`;
+  if (category === "high_energy_drop") return `${genre}_drop_mirror_release_${variant}`;
+  if (category === "buildup") return `${genre}_tension_mirror_rise_${variant}`;
+  if (category === "steady_bass_pulse") return `${genre}_mirror_groove_swap_${variant}`;
   if (category === "stop_music_moment" || category === "silence_or_pause") return "blackout_or_freeze";
-  return sceneChanged ? `${genre}_ambient_shift_${variant}` : `${genre}_ambient_hold`;
+  return sceneChanged ? `${genre}_sparse_mirror_shift_${variant}` : `${genre}_sparse_mirror_hold`;
+}
+
+function scenePoolHint(category) {
+  const pairs = buildSymmetryPairs(lights.length).slice(0, 6).map((pair) => pair.map((index) => positionName(index)));
+  const timing = category === "steady_bass_pulse" ? "bpm_or_half_bpm_swap" : category === "high_energy_drop" ? "mirrored_pair_flash" : "sparse_mirror_accent";
+  return {
+    timing,
+    allowed_motion: "mirror_pairs_only",
+    forbidden_motion: "continuous_ring_chase",
+    candidate_pairs: pairs,
+  };
 }
 
 function intentForSample(category, energy) {

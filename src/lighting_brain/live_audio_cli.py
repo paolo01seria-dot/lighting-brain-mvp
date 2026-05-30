@@ -15,7 +15,7 @@ def main():
   parser.add_argument("--host", default="127.0.0.1")
   parser.add_argument("--port", type=int, default=8790)
   parser.add_argument("--device", type=int, default=None)
-  parser.add_argument("--samplerate", type=int, default=44100)
+  parser.add_argument("--samplerate", type=int, default=None)
   parser.add_argument("--blocksize", type=int, default=1024)
   parser.add_argument("--gain", type=float, default=8.0)
   parser.add_argument("--list-devices", action="store_true")
@@ -56,6 +56,7 @@ def make_server(args):
     def stream_events(self, device_index):
       sounddevice = require_module("sounddevice")
       numpy = require_module("numpy")
+      samplerate = selected_samplerate(sounddevice, device_index, args.samplerate)
       frames = queue.Queue(maxsize=8)
       stop_event = threading.Event()
       previous_energy = 0.0
@@ -86,14 +87,14 @@ def make_server(args):
         with sounddevice.InputStream(
           device=device_index,
           channels=1,
-          samplerate=args.samplerate,
+          samplerate=samplerate,
           blocksize=args.blocksize,
           callback=callback,
         ):
           while not stop_event.is_set():
             samples = frames.get(timeout=1.0)
             energy = min(1.0, rms_level(samples) * args.gain)
-            bands = band_levels(samples, args.samplerate, 16)
+            bands = band_levels(samples, samplerate, 16)
             flux = sum(max(0.0, band - previous_bands[index]) for index, band in enumerate(bands)) / len(bands)
             category = classify_live_frame(energy, previous_energy, bands)
             event = {
@@ -138,6 +139,16 @@ def make_server(args):
       return
 
   return ThreadingHTTPServer((args.host, args.port), LiveAudioHandler)
+
+
+def selected_samplerate(sounddevice, device_index, requested_samplerate):
+  if requested_samplerate:
+    return requested_samplerate
+  try:
+    device = sounddevice.query_devices(device_index, "input")
+    return int(device.get("default_samplerate") or 44100)
+  except Exception:
+    return 44100
 
 
 if __name__ == "__main__":

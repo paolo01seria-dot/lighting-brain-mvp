@@ -2100,14 +2100,17 @@ function normalizeInputDeviceName(label, index) {
 }
 
 async function refreshLiveAudioDevices() {
-  elements.audioDevice.innerHTML = '<option value="default">Default Python input (may be microphone)</option>';
+  elements.audioDevice.innerHTML = "";
   try {
     const response = await fetch("http://127.0.0.1:8790/devices", { cache: "no-store" });
     if (!response.ok) throw new Error(`live server ${response.status}`);
     const devices = await response.json();
     const visibleDevices = devices.filter(shouldShowLiveDevice);
     const loopbackDevice = visibleDevices.find(isSystemLoopbackDevice);
-    visibleDevices.forEach((device) => {
+    const selectableDevices = loopbackDevice
+      ? visibleDevices.filter(isSystemLoopbackDevice)
+      : [{ index: "default", name: "Default Python input (may be microphone)" }, ...visibleDevices];
+    selectableDevices.forEach((device) => {
       const option = document.createElement("option");
       option.value = String(device.index);
       option.textContent = normalizeLiveDeviceName(device.name, device.index);

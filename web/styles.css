@@ -500,7 +500,7 @@ button:disabled {
   pointer-events: none;
 }
 
-.is-training .stage-label {
+.is-training-edit .stage-label {
   display: block;
 }
 
@@ -624,11 +624,11 @@ button:disabled {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
 
-.is-training .light-label {
+.is-training-edit .light-label {
   display: block;
 }
 
-.is-training .light {
+.is-training-edit .light {
   outline: 1px solid rgba(79, 195, 177, 0.45);
   outline-offset: 4px;
 }
@@ -684,7 +684,7 @@ button:disabled {
   transform: translateY(-50%);
 }
 
-.is-training .phase-button {
+.is-training-edit .phase-button {
   display: block;
 }
 

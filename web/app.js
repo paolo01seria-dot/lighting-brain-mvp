@@ -1823,6 +1823,17 @@ function isTrainingMode() {
   return Boolean(elements.trainingMode?.checked);
 }
 
+function canEditTrainingScene() {
+  return isTrainingMode() && !trainingCapture.active && trainingCapture.frames.length > 0;
+}
+
+function updateTrainingEditState() {
+  const editable = canEditTrainingScene();
+  document.body.classList.toggle("is-training-edit", editable);
+  elements.saveAnnotationButton.disabled = !editable;
+  elements.clearTrainingLightsButton.disabled = !editable;
+}
+
 function selectedTrainingDuration() {
   return Math.max(1, Number(elements.trainingDuration?.value ?? 30));
 }
@@ -1841,6 +1852,7 @@ function beginTrainingCapture(source) {
   elements.seekSlider.disabled = true;
   elements.durationLabel.textContent = formatTime(trainingCapture.duration);
   updateTrainingSummary();
+  updateTrainingEditState();
   logEvent(`training capture ${formatTime(trainingCapture.duration)}`);
 }
 
@@ -1850,6 +1862,7 @@ function stopTrainingCapture(reason = "stopped") {
   trainingCapture.reviewTime = 0;
   elements.seekSlider.disabled = !trainingCapture.frames.length;
   updateTrainingSummary();
+  updateTrainingEditState();
   logEvent(`training ${reason}: ${trainingCapture.frames.length} frames`);
 }
 
@@ -1898,6 +1911,7 @@ function captureTrainingFrame(reading) {
   elements.currentIntent.textContent = frame.intent ?? "-";
   elements.currentGesture.textContent = frame.dominant_component ?? frame.clock_source ?? "-";
   elements.currentEnergyTrend.textContent = frame.energy_trend ?? "-";
+  updateTrainingEditState();
 }
 
 function sceneCategoryForSample(category, sceneChanged) {
@@ -1953,7 +1967,7 @@ function applyTrainingReviewFrame(time) {
 }
 
 function cycleTrainingLight(index, direction = 1) {
-  if (!isTrainingMode()) return;
+  if (!canEditTrainingScene()) return;
   const state = lightStates[index];
   if (!state) return;
   const currentIndex = state.manualColorIndex === null || state.manualColorIndex === undefined
@@ -1971,7 +1985,7 @@ function cycleTrainingLight(index, direction = 1) {
 }
 
 function cycleTrainingLightBackward(event) {
-  if (!isTrainingMode()) return;
+  if (!canEditTrainingScene()) return;
   if (event.target.closest(".phase-button")) return;
   event.preventDefault();
   const index = Number(event.currentTarget.dataset.index);
@@ -1984,7 +1998,7 @@ function stopPhaseButtonEvent(event) {
 }
 
 function toggleTrainingLightPhase(event) {
-  if (!isTrainingMode()) return;
+  if (!canEditTrainingScene()) return;
   event.preventDefault();
   event.stopPropagation();
   const phaseButton = event.currentTarget;
@@ -2010,6 +2024,7 @@ function toggleTrainingLightPhase(event) {
 }
 
 function clearTrainingLights() {
+  if (!canEditTrainingScene()) return;
   lightStates.forEach((state) => {
     state.manualColorIndex = null;
     state.manualRandomColor = null;
@@ -2022,6 +2037,7 @@ function clearTrainingLights() {
 }
 
 function saveTrainingAnnotation() {
+  if (!canEditTrainingScene()) return;
   const time = currentPlaybackTime();
   const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
   const rhythmEvent = inputMode === "timeline" ? findTimelineRhythmEventAt(time) : null;
@@ -2570,6 +2586,7 @@ elements.trainingMode.addEventListener("change", () => {
   if (!isTrainingMode()) {
     stopTrainingCapture("off");
   }
+  updateTrainingEditState();
   updatePlayerTime();
   logEvent(isTrainingMode() ? "training on" : "training off");
 });
@@ -2629,7 +2646,7 @@ function stopDrag(event) {
   light.removeEventListener("pointerup", stopDrag);
   light.removeEventListener("pointercancel", stopDrag);
   dragging = null;
-  if (wasClick && Number.isInteger(index)) {
+  if (wasClick && Number.isInteger(index) && canEditTrainingScene()) {
     cycleTrainingLight(index);
   }
 }
@@ -2639,3 +2656,4 @@ updateOutputMode();
 setInputMode(elements.inputSource.value);
 drawTrackOverview();
 updateTrainingSummary();
+updateTrainingEditState();

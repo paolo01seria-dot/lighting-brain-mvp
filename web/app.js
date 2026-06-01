@@ -117,6 +117,7 @@ let pausedAt = 0;
 let animationFrame;
 let timelineAnimationFrame;
 let reviewAnimationFrame;
+let reviewAudioSource;
 let reviewPlaybackStartedAt = 0;
 let reviewPlaybackStartTime = 0;
 let isPlaying = false;
@@ -158,6 +159,8 @@ let trainingCapture = {
   reviewTime: 0,
   startedAt: 0,
   source: null,
+  audioSamples: [],
+  audioSampleRate: null,
 };
 
 function buildLights(count, keepPositions = true) {
@@ -1177,6 +1180,7 @@ function handleLiveAudioFrame(frame) {
   drawComponentLanes(componentLanes, time, { beatPulse: shouldDrawBeatPulse(time) });
   if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment" || frame.energy_drop > 0.18) {
     blackoutLights();
+    captureTrainingAudio(frame);
     captureTrainingFrame({
       time,
       energy,
@@ -1199,6 +1203,7 @@ function handleLiveAudioFrame(frame) {
     return;
   }
   updateLights(frequencyData, energy, rms, profile, Number(frame.spectral_flux ?? 0));
+  captureTrainingAudio(frame);
   captureTrainingFrame({
     time,
     energy,
@@ -2104,6 +2109,8 @@ function beginTrainingCapture(source) {
     reviewTime: 0,
     startedAt: audioContext?.currentTime ?? 0,
     source,
+    audioSamples: [],
+    audioSampleRate: null,
   };
   selectedTrainingCueId = null;
   elements.seekSlider.disabled = true;
@@ -2178,6 +2185,18 @@ function captureTrainingFrame(reading) {
   updateTrainingEditState();
 }
 
+function captureTrainingAudio(frame) {
+  if (!trainingCapture.active) return;
+  const samples = Array.isArray(frame.audio_samples) ? frame.audio_samples : [];
+  const sampleRate = Number(frame.audio_sample_rate);
+  if (!samples.length || !Number.isFinite(sampleRate) || sampleRate <= 0) return;
+  if (!trainingCapture.audioSampleRate) {
+    trainingCapture.audioSampleRate = sampleRate;
+  }
+  if (trainingCapture.audioSampleRate !== sampleRate) return;
+  trainingCapture.audioSamples.push(...samples.map((sample) => clamp(Number(sample), -1, 1)));
+}
+
 function sceneCategoryForSample(category, sceneChanged) {
   const genre = elements.genreProfile.value;
   const variant = currentSceneByCategory[category] ?? 0;
@@ -2250,6 +2269,7 @@ function pauseTrainingReviewPlayback() {
     cancelAnimationFrame(reviewAnimationFrame);
   }
   reviewAnimationFrame = null;
+  stopReviewAudioSource();
   updateReviewPlayButton();
 }
 
@@ -2261,6 +2281,7 @@ function toggleTrainingReviewPlayback() {
   }
   reviewPlaybackStartTime = trainingCapture.reviewTime ?? 0;
   reviewPlaybackStartedAt = performance.now();
+  startReviewAudioAt(reviewPlaybackStartTime);
   const animateReview = () => {
     const elapsed = (performance.now() - reviewPlaybackStartedAt) / 1000;
     const rawTime = reviewPlaybackStartTime + elapsed;
@@ -2276,6 +2297,36 @@ function toggleTrainingReviewPlayback() {
   };
   reviewAnimationFrame = requestAnimationFrame(animateReview);
   updateReviewPlayButton();
+}
+
+function stopReviewAudioSource() {
+  if (!reviewAudioSource) return;
+  try {
+    reviewAudioSource.stop();
+  } catch (_error) {
+    // Already stopped.
+  }
+  reviewAudioSource.disconnect();
+  reviewAudioSource = null;
+}
+
+function startReviewAudioAt(time) {
+  stopReviewAudioSource();
+  if (!audioContext || !trainingCapture.audioSamples?.length || !trainingCapture.audioSampleRate) return;
+  const buffer = audioContext.createBuffer(
+    1,
+    trainingCapture.audioSamples.length,
+    trainingCapture.audioSampleRate
+  );
+  buffer.copyToChannel(Float32Array.from(trainingCapture.audioSamples), 0);
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+  reviewAudioSource = source;
+  source.onended = () => {
+    if (reviewAudioSource === source) reviewAudioSource = null;
+  };
+  source.start(0, clamp(time, 0, Math.max(0, buffer.duration - 0.001)));
 }
 
 function cycleTrainingLight(index, direction = 1) {

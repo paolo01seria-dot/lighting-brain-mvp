@@ -107,6 +107,8 @@ def make_server(args):
               "sample_category": category,
               "component_lanes": component_lanes,
               "spectrum": [round(value, 4) for value in bands],
+              "audio_sample_rate": review_audio_samplerate(samplerate),
+              "audio_samples": review_audio_samples(samples, samplerate),
               "spectral_flux": round(flux, 4),
               "source": "sounddevice",
             }
@@ -151,6 +153,16 @@ def selected_samplerate(sounddevice, device_index, requested_samplerate):
     return int(device.get("default_samplerate") or 44100)
   except Exception:
     return 44100
+
+
+def review_audio_samplerate(samplerate):
+  return min(int(samplerate), 12000)
+
+
+def review_audio_samples(samples, samplerate):
+  target_rate = review_audio_samplerate(samplerate)
+  step = max(1, round(int(samplerate) / target_rate))
+  return [round(float(sample), 4) for sample in samples[::step]]
 
 
 if __name__ == "__main__":

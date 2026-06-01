@@ -11,9 +11,18 @@ const trainingColors = [
   { name: "green", value: [88, 221, 130] },
   { name: "blue", value: [88, 123, 255] },
   { name: "yellow", value: [255, 220, 88] },
-  { name: "purple", value: [174, 96, 255] },
+  { name: "white", value: [245, 247, 248] },
   { name: "casual", value: null },
   { name: "blackout", value: [0, 0, 0], blackout: true },
+];
+
+const casualTrainingColors = [
+  [255, 76, 91],
+  [88, 221, 130],
+  [255, 220, 88],
+  [88, 123, 255],
+  [174, 96, 255],
+  [245, 247, 248],
 ];
 
 const positionNaming = {
@@ -1046,10 +1055,7 @@ function blackoutAutoLights() {
 }
 
 function randomTrainingColor() {
-  const hue = Math.floor(Math.random() * 360);
-  const saturation = 78 + Math.floor(Math.random() * 18);
-  const lightness = 54 + Math.floor(Math.random() * 14);
-  return hslToRgb(hue, saturation, lightness);
+  return casualTrainingColors[Math.floor(Math.random() * casualTrainingColors.length)];
 }
 
 function hslToRgb(hue, saturation, lightness) {
@@ -1123,12 +1129,15 @@ function renderLights() {
     light.style.setProperty("--beam-opacity", showGlow ? String(intensity * 0.42) : "0");
     light.style.setProperty("--phase-left", phaseFirst ? phaseColor : phaseOff);
     light.style.setProperty("--phase-right", phaseSecond ? phaseColor : phaseOff);
+    light.style.setProperty("--phase-button-color", `rgba(${r}, ${g}, ${b}, 0.88)`);
     light.classList.toggle("active", intensity > 0.62);
     light.classList.toggle("manual", manual);
     light.classList.toggle("phase-split", phaseSplit);
     light.classList.toggle("blackout", manualBlackout);
     leftPhaseButton?.classList.toggle("is-off", !phaseFirst || manualBlackout);
     rightPhaseButton?.classList.toggle("is-off", !phaseSecond || manualBlackout);
+    leftPhaseButton?.classList.toggle("is-selected", partialPhase && phaseFirst && !manualBlackout);
+    rightPhaseButton?.classList.toggle("is-selected", partialPhase && phaseSecond && !manualBlackout);
   });
 }
 
@@ -2318,9 +2327,27 @@ function toggleTrainingLightPhase(event) {
     state.intensity = 1;
   }
   if (phaseButton.dataset.phase === "first") {
-    state.phaseFirstHalf = !state.phaseFirstHalf;
+    if (state.phaseFirstHalf === true && state.phaseSecondHalf === false) {
+      return;
+    }
+    if (state.phaseFirstHalf === false && state.phaseSecondHalf === true) {
+      state.phaseFirstHalf = true;
+      state.phaseSecondHalf = true;
+    } else {
+      state.phaseFirstHalf = true;
+      state.phaseSecondHalf = false;
+    }
   } else {
-    state.phaseSecondHalf = !state.phaseSecondHalf;
+    if (state.phaseFirstHalf === false && state.phaseSecondHalf === true) {
+      return;
+    }
+    if (state.phaseFirstHalf === true && state.phaseSecondHalf === false) {
+      state.phaseFirstHalf = true;
+      state.phaseSecondHalf = true;
+    } else {
+      state.phaseFirstHalf = false;
+      state.phaseSecondHalf = true;
+    }
   }
   state.intensity = state.phaseFirstHalf || state.phaseSecondHalf ? 1 : 0;
   renderLights();

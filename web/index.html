@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Lighting Brain</title>
-    <link rel="stylesheet" href="styles.css?v=20260530-13">
+    <link rel="stylesheet" href="styles.css?v=20260601-2">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -41,8 +41,9 @@
       button:disabled { color: #6e777c; cursor: not-allowed; }
       #playButton:not(:disabled) { background: #1f4f47; border-color: #367b70; }
       #stopButton:not(:disabled) { background: #4f2529; border-color: #793941; }
-      .mini-player { grid-column: 1 / -1; display: grid; grid-template-columns: 44px minmax(180px, 1fr) 44px; align-items: center; gap: 10px; margin-top: 4px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
-      .mini-player input { width: 100%; accent-color: var(--accent); }
+      .mini-player { grid-column: 1 / -1; display: grid; grid-template-columns: 44px 38px minmax(240px, 1fr) 44px; align-items: center; gap: 10px; margin-top: 4px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+      .review-play-button { width: 38px; min-height: 34px; padding: 0; font-size: 14px; }
+      .hidden-seek { display: none; }
       .tester-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 560px; }
       .meter-panel { padding: 20px; border-right: 1px solid var(--line); background: var(--panel); min-height: 0; }
       .status-row { display: flex; justify-content: space-between; gap: 18px; padding: 12px 0; border-bottom: 1px solid var(--line); }
@@ -94,14 +95,13 @@
       .light-label { position: absolute; left: 50%; top: calc(100% + 5px); display: none; width: 84px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 9px; line-height: 1.05; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
       .is-training-edit .light-label { display: block; }
       .is-training-edit .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
-      .source-timeline-control, .source-mic-panel, .device-control, .audio-device-summary-control { display: none !important; }
+      .source-timeline-control, .device-control, .audio-device-summary-control { display: none !important; }
       .mode-timeline .source-file-control, .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .is-mic-mode .source-timeline-control { display: none !important; }
       .output-timeline .source-timeline-control { display: flex !important; }
       .output-timeline .source-file-control { display: none !important; }
-      .is-mic-mode .source-mic-panel { display: block !important; }
       .is-mic-mode .device-control { display: none !important; }
       .is-mic-mode .audio-device-summary-control { display: grid !important; }
-      .is-training .mini-player.source-file-panel { display: grid !important; }
+      .mini-player .live-spectrum { height: 132px; margin: 0; cursor: pointer; }
       @media (max-width: 860px) { .topbar { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 10px; } .tester-layout { display: block; } .controls { justify-content: flex-start; margin-top: 0; } label, .file-control { flex: 1 1 calc((100% - 30px) / 4); min-width: 118px; width: auto; } .file-control { flex-basis: calc((100% - 30px) / 4); } .transport { flex: 0 0 156px; } .training-switch { flex: 0 0 78px; min-width: 78px; width: 78px; } .training-duration-control { flex: 0 0 96px; min-width: 96px; } .audio-device-summary-control { flex: 1 1 180px; min-width: 160px; } .sample-control { flex: 1 1 220px; } .range-control { flex: 1 1 180px; } .number-control { flex: 0 0 92px; } .mini-player { margin-top: 0; } .meter-panel { border-right: 0; border-bottom: 1px solid var(--line); } .stage-panel { padding: 14px; gap: 8px; } }
     </style>
   </head>
@@ -120,9 +120,9 @@
           <label>
             <span>Input</span>
             <select id="inputSource">
+              <option value="system_audio" selected>Audio Device</option>
               <option value="file">Load file</option>
               <option value="mic_device">Mic Device</option>
-              <option value="system_audio">Python Live Audio</option>
               <option value="rekordbox" disabled>Rekordbox</option>
               <option value="spotify" disabled>Spotify</option>
             </select>
@@ -222,9 +222,11 @@
           </label>
         </div>
 
-        <div class="mini-player source-file-panel" aria-label="Audio position">
+        <div class="mini-player review-player" aria-label="Audio position">
           <span id="currentTimeLabel">0:00</span>
-          <input id="seekSlider" type="range" min="0" max="1000" value="0" disabled>
+          <button id="reviewPlayButton" class="review-play-button" type="button" disabled aria-label="Play review">▶</button>
+          <canvas id="liveSpectrum" class="live-spectrum" width="980" height="156" aria-label="Dissector lanes"></canvas>
+          <input id="seekSlider" class="hidden-seek" type="range" min="0" max="1000" value="0" disabled>
           <span id="durationLabel">0:00</span>
         </div>
       </section>
@@ -247,7 +249,6 @@
             <div id="energyFill"></div>
           </div>
           <canvas id="trackOverview" class="track-overview source-file-panel" width="520" height="132" aria-label="Track overview"></canvas>
-          <canvas id="liveSpectrum" class="live-spectrum source-mic-panel" width="520" height="156" aria-label="Dissector lanes"></canvas>
           <section class="metadata-panel" aria-label="Current metadata">
             <h3>Current brain</h3>
             <dl>
@@ -302,6 +303,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260530-13"></script>
+    <script src="app.js?v=20260601-2"></script>
   </body>
 </html>

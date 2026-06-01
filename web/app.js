@@ -51,6 +51,7 @@ const elements = {
   genreProfile: document.querySelector("#genreProfile"),
   playButton: document.querySelector("#playButton"),
   stopButton: document.querySelector("#stopButton"),
+  reviewPlayButton: document.querySelector("#reviewPlayButton"),
   stateLabel: document.querySelector("#stateLabel"),
   energyLabel: document.querySelector("#energyLabel"),
   energyFill: document.querySelector("#energyFill"),
@@ -106,8 +107,11 @@ let startedAt = 0;
 let pausedAt = 0;
 let animationFrame;
 let timelineAnimationFrame;
+let reviewAnimationFrame;
+let reviewPlaybackStartedAt = 0;
+let reviewPlaybackStartTime = 0;
 let isPlaying = false;
-let inputMode = "file";
+let inputMode = "system_audio";
 let overviewCacheCanvas;
 let previousSpectrum;
 let sceneVariant = 0;
@@ -1691,6 +1695,60 @@ function trainingReviewAvailable() {
   return !trainingCapture.active && trainingCapture.frames.length > 0;
 }
 
+function trainingReviewCueTimes() {
+  if (!trainingCapture.frames.length) return [];
+  const times = new Set([0, roundNumber(trainingCapture.duration, 4)]);
+  trainingCapture.cues.forEach((cue) => times.add(roundNumber(cue.time, 4)));
+  const intervals = trainingCapture.frames
+    .map((frame) => Number(frame.rhythm_split?.base_interval_seconds))
+    .filter((interval) => Number.isFinite(interval) && interval >= 0.12 && interval <= 2);
+  const sortedIntervals = intervals.sort((left, right) => left - right);
+  const interval = sortedIntervals.length ? sortedIntervals[Math.floor(sortedIntervals.length / 2)] : 0.5;
+  for (let time = 0; time <= trainingCapture.duration + interval * 0.5; time += interval) {
+    times.add(roundNumber(clamp(time, 0, trainingCapture.duration), 4));
+  }
+  return [...times].sort((left, right) => left - right);
+}
+
+function snapTrainingReviewTime(rawTime) {
+  const times = trainingReviewCueTimes();
+  if (!times.length) return clamp(rawTime, 0, trainingCapture.duration);
+  return times.reduce((nearest, time) => (
+    Math.abs(time - rawTime) < Math.abs(nearest - rawTime) ? time : nearest
+  ), times[0]);
+}
+
+function captureLightSnapshot() {
+  return lightStates.map((state) => ({
+    intensity: roundNumber(state.intensity ?? 0, 4),
+    age: state.age ?? 0,
+    colorIndex: state.colorIndex ?? 0,
+    manualColorIndex: state.manualColorIndex ?? null,
+    manualRandomColor: state.manualRandomColor ?? null,
+    phaseFirstHalf: state.phaseFirstHalf !== false,
+    phaseSecondHalf: state.phaseSecondHalf !== false,
+  }));
+}
+
+function applyLightSnapshot(snapshot) {
+  if (!Array.isArray(snapshot)) return false;
+  snapshot.forEach((state, index) => {
+    if (!lightStates[index]) return;
+    lightStates[index] = {
+      ...lightStates[index],
+      intensity: clamp(Number(state.intensity ?? 0), 0, 1),
+      age: Number(state.age ?? 0),
+      colorIndex: clamp(Math.round(Number(state.colorIndex ?? 0)), 0, colors.length - 1),
+      manualColorIndex: state.manualColorIndex,
+      manualRandomColor: state.manualRandomColor,
+      phaseFirstHalf: state.phaseFirstHalf !== false,
+      phaseSecondHalf: state.phaseSecondHalf !== false,
+    };
+  });
+  renderLights();
+  return true;
+}
+
 function drawComponentLanes(componentLanes, time, options = {}) {
   const canvas = elements.liveSpectrum;
   if (!canvas) return;
@@ -1801,6 +1859,15 @@ function drawComponentLanes(componentLanes, time, options = {}) {
 
 function drawTrainingCueMarkers(context, width, height, ratio, duration, currentTime) {
   if (!trainingReviewAvailable()) return;
+  trainingReviewCueTimes().forEach((time) => {
+    const x = clamp(time / Math.max(duration, 0.001), 0, 1) * width;
+    context.strokeStyle = "rgba(255, 255, 255, 0.16)";
+    context.lineWidth = Math.max(1, ratio);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+  });
   trainingCapture.cues.forEach((cue) => {
     const x = clamp(cue.time / Math.max(duration, 0.001), 0, 1) * width;
     context.strokeStyle = "rgba(255, 196, 87, 0.86)";
@@ -1963,7 +2030,9 @@ async function seekToSliderValue(value) {
     return;
   }
   if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length) {
-    const time = (Number(value) / 1000) * trainingCapture.duration;
+    pauseTrainingReviewPlayback();
+    const rawTime = (Number(value) / 1000) * trainingCapture.duration;
+    const time = snapTrainingReviewTime(rawTime);
     applyTrainingReviewFrame(time);
     redrawTrainingReview();
     updatePlayerTime();
@@ -2007,6 +2076,7 @@ function updateTrainingEditState() {
   elements.saveAnnotationButton.disabled = !editable;
   elements.clearTrainingLightsButton.disabled = !editable;
   updateCueEditor();
+  updateReviewPlayButton();
 }
 
 function selectedTrainingDuration() {
@@ -2015,6 +2085,7 @@ function selectedTrainingDuration() {
 
 function beginTrainingCapture(source) {
   if (!isTrainingMode()) return;
+  pauseTrainingReviewPlayback();
   componentHistory = [];
   trainingCapture = {
     active: true,
@@ -2040,6 +2111,10 @@ function stopTrainingCapture(reason = "stopped") {
   elements.seekSlider.disabled = !trainingCapture.frames.length;
   updateTrainingSummary();
   updateTrainingEditState();
+  if (trainingCapture.frames.length) {
+    applyTrainingReviewFrame(0);
+    redrawTrainingReview();
+  }
   logEvent(`training ${reason}: ${trainingCapture.frames.length} frames`);
 }
 
@@ -2083,6 +2158,7 @@ function captureTrainingFrame(reading) {
     dominant_component: strongestComponentLane(componentLanes),
     rhythm_split: estimateFastestRhythmSplit(time),
     clock_source: musicalClock.source,
+    light_snapshot: captureLightSnapshot(),
   };
   trainingCapture.frames.push(frame);
   elements.currentSampleCategory.textContent = frame.sample_category ?? "-";
@@ -2145,7 +2221,52 @@ function applyTrainingReviewFrame(time) {
   if (cue) selectedTrainingCueId = cue.id;
   updateCueEditor();
   updateMeter(frame.energy ?? 0);
+  if (!applyLightSnapshot(frame.light_snapshot)) {
+    if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment") {
+      blackoutLights();
+    }
+  }
   return true;
+}
+
+function updateReviewPlayButton() {
+  if (!elements.reviewPlayButton) return;
+  const enabled = trainingReviewAvailable() && (inputMode === "mic_device" || inputMode === "system_audio");
+  elements.reviewPlayButton.disabled = !enabled;
+  elements.reviewPlayButton.textContent = reviewAnimationFrame ? "⏸" : "▶";
+}
+
+function pauseTrainingReviewPlayback() {
+  if (reviewAnimationFrame) {
+    cancelAnimationFrame(reviewAnimationFrame);
+  }
+  reviewAnimationFrame = null;
+  updateReviewPlayButton();
+}
+
+function toggleTrainingReviewPlayback() {
+  if (!trainingReviewAvailable() || isPlaying) return;
+  if (reviewAnimationFrame) {
+    pauseTrainingReviewPlayback();
+    return;
+  }
+  reviewPlaybackStartTime = trainingCapture.reviewTime ?? 0;
+  reviewPlaybackStartedAt = performance.now();
+  const animateReview = () => {
+    const elapsed = (performance.now() - reviewPlaybackStartedAt) / 1000;
+    const rawTime = reviewPlaybackStartTime + elapsed;
+    const time = snapTrainingReviewTime(rawTime);
+    applyTrainingReviewFrame(time);
+    redrawTrainingReview();
+    updatePlayerTime();
+    if (rawTime >= trainingCapture.duration) {
+      pauseTrainingReviewPlayback();
+      return;
+    }
+    reviewAnimationFrame = requestAnimationFrame(animateReview);
+  };
+  reviewAnimationFrame = requestAnimationFrame(animateReview);
+  updateReviewPlayButton();
 }
 
 function cycleTrainingLight(index, direction = 1) {
@@ -2369,6 +2490,7 @@ async function toggleTransport() {
 }
 
 function setInputMode(mode) {
+  pauseTrainingReviewPlayback();
   if (inputMode === "timeline" && mode !== "timeline") {
     stopTimelinePlayback({ resetPosition: false, keepLights: true });
   }
@@ -2417,8 +2539,8 @@ function setInputMode(mode) {
   } else {
     stopDeviceInput();
     stopPlayback({ resetPosition: false, keepLights: true });
-    setState("Live audio ready");
-    elements.trackLabel.textContent = "Python Live Audio";
+    setState("Audio Device ready");
+    elements.trackLabel.textContent = "Audio Device";
     elements.playButton.textContent = "Listen";
     elements.playButton.disabled = false;
     elements.stopButton.disabled = true;
@@ -2500,7 +2622,7 @@ async function refreshLiveAudioDevices() {
     }
   } catch (_error) {
     updateAudioDeviceSummary("Python server offline");
-    setState("Start Python live server");
+    setState("Start audio server");
     logEvent("run: lighting-live-audio");
   }
 }
@@ -2564,9 +2686,9 @@ async function startLiveAudio() {
   elements.playButton.textContent = "Pause";
   elements.playButton.disabled = false;
   elements.stopButton.disabled = false;
-  elements.trackLabel.textContent = "Python Live Audio";
-  setState("Live listening");
-  logEvent("python live audio");
+  elements.trackLabel.textContent = "Audio Device";
+  setState("Audio Device listening");
+  logEvent("audio device live");
   componentHistory = [];
   beginTrainingCapture("python_live_audio");
   liveEventSource.onmessage = (event) => {
@@ -2589,8 +2711,8 @@ function stopLiveAudio(resetUi = true) {
     isPlaying = false;
     cancelAnimationFrame(animationFrame);
     if (resetUi) {
-      setState("Live audio ready");
-      elements.trackLabel.textContent = "Python Live Audio";
+      setState("Audio Device ready");
+      elements.trackLabel.textContent = "Audio Device";
       elements.playButton.textContent = "Listen";
       elements.playButton.disabled = false;
       elements.stopButton.disabled = true;
@@ -2759,7 +2881,7 @@ elements.trackOverview.addEventListener("click", (event) => {
 
 elements.liveSpectrum.addEventListener("click", (event) => {
   if (!trainingReviewAvailable()) return;
-  const time = cueTimeFromCanvasEvent(event);
+  const time = snapTrainingReviewTime(cueTimeFromCanvasEvent(event));
   seekToSliderValue((time / Math.max(trainingCapture.duration, 0.001)) * 1000).catch((error) => {
     setState("Seek error");
     logEvent(error.message);
@@ -2769,7 +2891,11 @@ elements.liveSpectrum.addEventListener("click", (event) => {
 elements.liveSpectrum.addEventListener("contextmenu", (event) => {
   if (!canEditTrainingScene()) return;
   event.preventDefault();
-  addTrainingCue(cueTimeFromCanvasEvent(event));
+  addTrainingCue(snapTrainingReviewTime(cueTimeFromCanvasEvent(event)));
+});
+
+elements.reviewPlayButton?.addEventListener("click", () => {
+  toggleTrainingReviewPlayback();
 });
 
 window.addEventListener("resize", () => {

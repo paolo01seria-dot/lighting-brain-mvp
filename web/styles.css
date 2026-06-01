@@ -86,7 +86,7 @@ p {
 .mini-player {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 44px minmax(180px, 1fr) 44px;
+  grid-template-columns: 44px 38px minmax(240px, 1fr) 44px;
   align-items: center;
   gap: 10px;
   margin-top: 4px;
@@ -95,17 +95,18 @@ p {
   font-size: 12px;
 }
 
-.mini-player input {
-  width: 100%;
-  accent-color: var(--accent);
+.review-play-button {
+  width: 38px;
+  min-height: 34px;
+  padding: 0;
+  font-size: 14px;
 }
 
-.mini-player input:disabled {
-  opacity: 0.45;
+.hidden-seek {
+  display: none;
 }
 
 .source-timeline-control,
-.source-mic-panel,
 .device-control,
 .audio-device-summary-control {
   display: none !important;
@@ -126,19 +127,11 @@ p {
   display: none !important;
 }
 
-.is-mic-mode .source-mic-panel {
-  display: block !important;
-}
-
 .is-mic-mode .device-control {
   display: none !important;
 }
 
 .is-mic-mode .audio-device-summary-control {
-  display: grid !important;
-}
-
-.is-training .mini-player.source-file-panel {
   display: grid !important;
 }
 
@@ -374,6 +367,12 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #0d1011;
+}
+
+.mini-player .live-spectrum {
+  height: 132px;
+  margin: 0;
+  cursor: pointer;
 }
 
 .event-log {

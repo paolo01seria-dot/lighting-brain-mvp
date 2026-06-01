@@ -65,6 +65,7 @@ const elements = {
   energyLabel: document.querySelector("#energyLabel"),
   energyFill: document.querySelector("#energyFill"),
   trackOverview: document.querySelector("#trackOverview"),
+  spectrumScroller: document.querySelector("#spectrumScroller"),
   liveSpectrum: document.querySelector("#liveSpectrum"),
   eventLog: document.querySelector("#eventLog"),
   lightCount: document.querySelector("#lightCount"),
@@ -1767,6 +1768,7 @@ function drawComponentLanes(componentLanes, time, options = {}) {
   const canvas = elements.liveSpectrum;
   if (!canvas) return;
   const context = canvas.getContext("2d");
+  updateSpectrumCanvasWidth();
   const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   const width = Math.max(260, Math.round(rect.width * ratio));
@@ -1869,6 +1871,38 @@ function drawComponentLanes(componentLanes, time, options = {}) {
     context.textBaseline = "middle";
     context.fillText(componentLaneLabels[name], Math.round(8 * ratio), y + laneHeight / 2);
   });
+  if (reviewMode && reviewAnimationFrame) {
+    followSpectrumPlayhead(currentTime, captureDuration);
+  }
+}
+
+function updateSpectrumCanvasWidth() {
+  const canvas = elements.liveSpectrum;
+  const scroller = elements.spectrumScroller;
+  if (!canvas || !scroller) return;
+  const reviewMode = !trainingCapture.active && trainingCapture.frames.length > 0;
+  if (!reviewMode) {
+    canvas.style.width = "100%";
+    return;
+  }
+  const visibleWidth = scroller.clientWidth || canvas.getBoundingClientRect().width || 980;
+  const pixelsPerSecond = 82;
+  const width = Math.max(visibleWidth, Math.round(trainingCapture.duration * pixelsPerSecond));
+  canvas.style.width = `${width}px`;
+}
+
+function followSpectrumPlayhead(currentTime, duration) {
+  const canvas = elements.liveSpectrum;
+  const scroller = elements.spectrumScroller;
+  if (!canvas || !scroller || !duration) return;
+  const canvasWidth = canvas.getBoundingClientRect().width;
+  const x = clamp(currentTime / Math.max(duration, 0.001), 0, 1) * canvasWidth;
+  const leftEdge = scroller.scrollLeft;
+  const rightEdge = leftEdge + scroller.clientWidth;
+  const margin = Math.min(180, scroller.clientWidth * 0.34);
+  if (x < leftEdge + margin || x > rightEdge - margin) {
+    scroller.scrollLeft = clamp(x - scroller.clientWidth * 0.45, 0, canvasWidth - scroller.clientWidth);
+  }
 }
 
 function drawTrainingCueMarkers(context, width, height, ratio, duration, currentTime) {
@@ -2100,6 +2134,9 @@ function selectedTrainingDuration() {
 function beginTrainingCapture(source) {
   if (!isTrainingMode()) return;
   pauseTrainingReviewPlayback();
+  if (elements.spectrumScroller) {
+    elements.spectrumScroller.scrollLeft = 0;
+  }
   componentHistory = [];
   trainingCapture = {
     active: true,

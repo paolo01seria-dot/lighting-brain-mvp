@@ -89,6 +89,7 @@ p {
   grid-template-columns: 44px 38px minmax(240px, 1fr) 44px;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   margin-top: 4px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -370,9 +371,21 @@ button:disabled {
 }
 
 .mini-player .live-spectrum {
+  width: 100%;
   height: 132px;
   margin: 0;
+  border: 0;
+  border-radius: 0;
   cursor: pointer;
+}
+
+.spectrum-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #0d1011;
 }
 
 .event-log {

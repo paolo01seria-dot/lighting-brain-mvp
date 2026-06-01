@@ -394,8 +394,8 @@ button:disabled {
   grid-template-rows: repeat(4, 1fr);
   height: 132px;
   padding-left: 8px;
-  background: rgba(13, 16, 17, 0.66);
-  color: rgba(245, 247, 248, 0.9);
+  background: rgba(13, 16, 17, 0.38);
+  color: rgba(245, 247, 248, 0.76);
   font-size: 11px;
   pointer-events: none;
 }

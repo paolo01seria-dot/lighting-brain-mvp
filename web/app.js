@@ -119,6 +119,8 @@ let animationFrame;
 let timelineAnimationFrame;
 let reviewAnimationFrame;
 let reviewAudioSource;
+let reviewAudioElement;
+let reviewAudioObjectUrl;
 let reviewPlaybackStartedAt = 0;
 let reviewPlaybackStartTime = 0;
 let isPlaying = false;
@@ -1092,10 +1094,7 @@ function manualLightColor(state) {
   const color = trainingColors[state.manualColorIndex];
   if (!color) return null;
   if (color.name === "casual") {
-    if (!state.manualRandomColor) {
-      state.manualRandomColor = randomTrainingColor();
-    }
-    return { ...color, value: state.manualRandomColor };
+    return { ...color, value: [245, 247, 248], randomizeOnPlayback: true };
   }
   return color;
 }
@@ -1106,6 +1105,7 @@ function renderLights() {
     const manual = state.manualColorIndex !== null && state.manualColorIndex !== undefined;
     const manualColor = manualLightColor(state);
     const color = manualColor ?? colors[state.colorIndex];
+    const manualCasual = Boolean(manual && manualColor?.name === "casual");
     const [r, g, b] = color.value;
     const phaseFirst = state.phaseFirstHalf !== false;
     const phaseSecond = state.phaseSecondHalf !== false;
@@ -1122,7 +1122,9 @@ function renderLights() {
     const rightPhaseButton = light.querySelector('[data-phase="second"]');
 
     light.style.background = visible
-      ? phaseSplit
+      ? manualCasual
+        ? "radial-gradient(circle at 50% 44%, rgba(255, 255, 255, 0.38) 0 10%, rgba(0, 0, 0, 0.08) 11% 56%, rgba(0, 0, 0, 0.62) 74%), url('assets/casual-color.jpg') center / cover"
+        : phaseSplit
         ? "radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.18) 0 10%, rgba(255, 255, 255, 0.06) 11% 29%, rgba(0, 0, 0, 0.42) 30% 64%, rgba(0, 0, 0, 0.82) 65%), linear-gradient(145deg, rgba(255, 255, 255, 0.13), rgba(4, 6, 7, 0.9) 48%, rgba(255, 255, 255, 0.07))"
         : `radial-gradient(circle at 50% 44%, rgba(255, 255, 255, ${0.18 + intensity * 0.42}) 0 12%, rgba(${r}, ${g}, ${b}, ${0.34 + intensity * 0.58}) 13% 48%, rgba(${r}, ${g}, ${b}, ${0.12 + intensity * 0.22}) 49% 72%, rgba(0, 0, 0, 0.58) 73%)`
       : "";
@@ -1137,6 +1139,7 @@ function renderLights() {
     light.style.setProperty("--phase-button-color", `rgba(${r}, ${g}, ${b}, 0.88)`);
     light.classList.toggle("active", intensity > 0.62);
     light.classList.toggle("manual", manual);
+    light.classList.toggle("casual", manualCasual && !manualBlackout);
     light.classList.toggle("phase-split", phaseSplit);
     light.classList.toggle("blackout", manualBlackout);
     leftPhaseButton?.classList.toggle("is-off", !phaseFirst || manualBlackout);
@@ -2383,6 +2386,16 @@ async function toggleTrainingReviewPlayback() {
 }
 
 function stopReviewAudioSource() {
+  if (reviewAudioElement) {
+    reviewAudioElement.pause();
+    reviewAudioElement.removeAttribute("src");
+    reviewAudioElement.load();
+    reviewAudioElement = null;
+  }
+  if (reviewAudioObjectUrl) {
+    URL.revokeObjectURL(reviewAudioObjectUrl);
+    reviewAudioObjectUrl = null;
+  }
   if (!reviewAudioSource) return;
   try {
     reviewAudioSource.stop();
@@ -2398,28 +2411,66 @@ function stopReviewAudioSource() {
 
 async function startReviewAudioAt(time) {
   stopReviewAudioSource();
-  if (!audioContext || !trainingCapture.audioSamples?.length || !trainingCapture.audioSampleRate) return;
-  if (audioContext.state === "suspended") {
+  if (!trainingCapture.audioSamples?.length || !trainingCapture.audioSampleRate) {
+    logEvent("review audio missing: record a new training take");
+    return;
+  }
+  if (audioContext?.state === "suspended") {
     await audioContext.resume();
   }
-  const buffer = audioContext.createBuffer(
-    1,
-    trainingCapture.audioSamples.length,
-    trainingCapture.audioSampleRate
-  );
-  buffer.copyToChannel(Float32Array.from(trainingCapture.audioSamples), 0);
-  const source = audioContext.createBufferSource();
-  const gain = audioContext.createGain();
-  gain.gain.value = 1.8;
-  source.buffer = buffer;
-  source.connect(gain);
-  gain.connect(audioContext.destination);
-  source.reviewGain = gain;
-  reviewAudioSource = source;
-  source.onended = () => {
-    if (reviewAudioSource === source) reviewAudioSource = null;
+  const offset = clamp(time, 0, Math.max(0, trainingCapture.audioSamples.length / trainingCapture.audioSampleRate - 0.001));
+  const wavBlob = audioSamplesToWavBlob(trainingCapture.audioSamples, trainingCapture.audioSampleRate);
+  reviewAudioObjectUrl = URL.createObjectURL(wavBlob);
+  reviewAudioElement = new Audio(reviewAudioObjectUrl);
+  reviewAudioElement.preload = "auto";
+  reviewAudioElement.volume = 1;
+  reviewAudioElement.onended = () => {
+    reviewAudioElement = null;
   };
-  source.start(0, clamp(time, 0, Math.max(0, buffer.duration - 0.001)));
+  await new Promise((resolve) => {
+    if (reviewAudioElement.readyState >= 1) {
+      resolve();
+      return;
+    }
+    reviewAudioElement.addEventListener("loadedmetadata", resolve, { once: true });
+  });
+  reviewAudioElement.currentTime = offset;
+  await reviewAudioElement.play();
+}
+
+function audioSamplesToWavBlob(samples, sampleRate) {
+  const channelCount = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channelCount, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channelCount * bytesPerSample, true);
+  view.setUint16(32, channelCount * bytesPerSample, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+  let offset = 44;
+  samples.forEach((sample) => {
+    const value = clamp(Number(sample), -1, 1);
+    view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+    offset += bytesPerSample;
+  });
+  return new Blob([view], { type: "audio/wav" });
+}
+
+function writeAscii(view, offset, text) {
+  for (let index = 0; index < text.length; index += 1) {
+    view.setUint8(offset + index, text.charCodeAt(index));
+  }
 }
 
 function cycleTrainingLight(index, direction = 1) {
@@ -2431,7 +2482,7 @@ function cycleTrainingLight(index, direction = 1) {
     : state.manualColorIndex;
   const nextIndex = (currentIndex + direction + trainingColors.length) % trainingColors.length;
   state.manualColorIndex = nextIndex;
-  state.manualRandomColor = trainingColors[nextIndex].name === "casual" ? randomTrainingColor() : null;
+  state.manualRandomColor = null;
   state.intensity = trainingColors[nextIndex].blackout ? 0 : 1;
   if (state.phaseFirstHalf === false && state.phaseSecondHalf === false && !trainingColors[nextIndex].blackout) {
     state.phaseFirstHalf = true;
@@ -2541,6 +2592,7 @@ function saveTrainingAnnotation() {
       const info = positionInfo(index);
       const color = manualLightColor(state);
       const isBlackout = Boolean(color?.blackout || (state.phaseFirstHalf === false && state.phaseSecondHalf === false));
+      const isCasual = color?.name === "casual";
       return {
         index,
         position_name: positionName(index),
@@ -2555,7 +2607,8 @@ function saveTrainingAnnotation() {
         x: roundNumber(positions[index]?.x ?? 0, 2),
         y: roundNumber(positions[index]?.y ?? 0, 2),
         color: color?.name ?? "off",
-        rgb: color?.value ?? [0, 0, 0],
+        rgb: isCasual ? null : color?.value ?? [0, 0, 0],
+        random_palette: isCasual ? casualTrainingColors : null,
         intensity: color && !isBlackout ? 1 : 0,
         phase: {
           first_half_on: state.phaseFirstHalf !== false,

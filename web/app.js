@@ -1803,14 +1803,10 @@ function drawComponentLanes(componentLanes, time, options = {}) {
   }
 
   const laneHeight = height / componentLaneNames.length;
-  componentLaneNames.forEach((name, laneIndex) => {
+  componentLaneNames.forEach((_name, laneIndex) => {
     const y = laneIndex * laneHeight;
     context.fillStyle = laneIndex % 2 === 0 ? "rgba(255, 255, 255, 0.018)" : "rgba(255, 255, 255, 0.036)";
     context.fillRect(0, y, width, laneHeight);
-    context.fillStyle = "rgba(245, 247, 248, 0.88)";
-    context.font = `${Math.round(11 * ratio)}px system-ui, sans-serif`;
-    context.textBaseline = "middle";
-    context.fillText(componentLaneLabels[name], Math.round(8 * ratio), y + laneHeight / 2);
     context.strokeStyle = "rgba(145, 163, 168, 0.18)";
     context.beginPath();
     context.moveTo(0, y + laneHeight);
@@ -1877,15 +1873,6 @@ function drawComponentLanes(componentLanes, time, options = {}) {
 
   drawTrainingCueMarkers(context, width, height, ratio, captureDuration, reviewMode ? currentTime : null);
 
-  context.fillStyle = "rgba(13, 16, 17, 0.78)";
-  context.fillRect(0, 0, Math.round(62 * ratio), height);
-  componentLaneNames.forEach((name, laneIndex) => {
-    const y = laneIndex * laneHeight;
-    context.fillStyle = "rgba(245, 247, 248, 0.9)";
-    context.font = `${Math.round(11 * ratio)}px system-ui, sans-serif`;
-    context.textBaseline = "middle";
-    context.fillText(componentLaneLabels[name], Math.round(8 * ratio), y + laneHeight / 2);
-  });
   if (reviewMode && reviewAnimationFrame) {
     followSpectrumPlayhead(currentTime, captureDuration);
   }
@@ -2369,7 +2356,7 @@ function pauseTrainingReviewPlayback() {
   updateReviewPlayButton();
 }
 
-function toggleTrainingReviewPlayback() {
+async function toggleTrainingReviewPlayback() {
   if (!trainingReviewAvailable() || isPlaying) return;
   if (reviewAnimationFrame) {
     pauseTrainingReviewPlayback();
@@ -2377,7 +2364,7 @@ function toggleTrainingReviewPlayback() {
   }
   reviewPlaybackStartTime = trainingCapture.reviewTime ?? 0;
   reviewPlaybackStartedAt = performance.now();
-  startReviewAudioAt(reviewPlaybackStartTime);
+  await startReviewAudioAt(reviewPlaybackStartTime);
   const animateReview = () => {
     const elapsed = (performance.now() - reviewPlaybackStartedAt) / 1000;
     const rawTime = reviewPlaybackStartTime + elapsed;
@@ -2402,13 +2389,19 @@ function stopReviewAudioSource() {
   } catch (_error) {
     // Already stopped.
   }
+  if (reviewAudioSource.reviewGain) {
+    reviewAudioSource.reviewGain.disconnect();
+  }
   reviewAudioSource.disconnect();
   reviewAudioSource = null;
 }
 
-function startReviewAudioAt(time) {
+async function startReviewAudioAt(time) {
   stopReviewAudioSource();
   if (!audioContext || !trainingCapture.audioSamples?.length || !trainingCapture.audioSampleRate) return;
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
   const buffer = audioContext.createBuffer(
     1,
     trainingCapture.audioSamples.length,
@@ -2416,8 +2409,12 @@ function startReviewAudioAt(time) {
   );
   buffer.copyToChannel(Float32Array.from(trainingCapture.audioSamples), 0);
   const source = audioContext.createBufferSource();
+  const gain = audioContext.createGain();
+  gain.gain.value = 1.8;
   source.buffer = buffer;
-  source.connect(audioContext.destination);
+  source.connect(gain);
+  gain.connect(audioContext.destination);
+  source.reviewGain = gain;
   reviewAudioSource = source;
   source.onended = () => {
     if (reviewAudioSource === source) reviewAudioSource = null;
@@ -3069,7 +3066,10 @@ elements.liveSpectrum.addEventListener("contextmenu", (event) => {
 });
 
 elements.reviewPlayButton?.addEventListener("click", () => {
-  toggleTrainingReviewPlayback();
+  toggleTrainingReviewPlayback().catch((error) => {
+    setState("Review audio error");
+    logEvent(error.message);
+  });
 });
 
 window.addEventListener("resize", () => {

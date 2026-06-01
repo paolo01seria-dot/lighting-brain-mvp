@@ -54,12 +54,11 @@ select {
 }
 
 .brand-mark {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
-  background:
-    linear-gradient(135deg, #ff4f62 0 25%, #ffc857 25% 50%, #30c5ff 50% 75%, #f5f7f8 75%);
-  box-shadow: 0 0 22px rgba(79, 195, 177, 0.25);
+  background: url("assets/casual-color.jpg") center / cover;
+  box-shadow: 0 0 22px rgba(79, 195, 177, 0.35);
 }
 
 h1 {

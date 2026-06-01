@@ -156,6 +156,7 @@ let trainingCapture = {
   active: false,
   frames: [],
   cues: [],
+  suppressedCueTimes: [],
   duration: 0,
   reviewTime: 0,
   startedAt: 0,
@@ -1712,8 +1713,16 @@ function trainingReviewAvailable() {
 
 function trainingReviewCueTimes() {
   if (!trainingCapture.frames.length) return [];
-  const times = new Set([0, roundNumber(trainingCapture.duration, 4)]);
+  const times = new Set(trainingReviewAutomaticCueTimes());
   trainingCapture.cues.forEach((cue) => times.add(roundNumber(cue.time, 4)));
+  return [...times]
+    .filter((time) => !isSuppressedCueTime(time))
+    .sort((left, right) => left - right);
+}
+
+function trainingReviewAutomaticCueTimes() {
+  if (!trainingCapture.frames.length) return [];
+  const times = new Set([0, roundNumber(trainingCapture.duration, 4)]);
   const intervals = trainingCapture.frames
     .map((frame) => Number(frame.rhythm_split?.base_interval_seconds))
     .filter((interval) => Number.isFinite(interval) && interval >= 0.12 && interval <= 2);
@@ -1723,6 +1732,12 @@ function trainingReviewCueTimes() {
     times.add(roundNumber(clamp(time, 0, trainingCapture.duration), 4));
   }
   return [...times].sort((left, right) => left - right);
+}
+
+function isSuppressedCueTime(time) {
+  return (trainingCapture.suppressedCueTimes ?? []).some((suppressedTime) => (
+    Math.abs(suppressedTime - time) <= cueHitThresholdSeconds()
+  ));
 }
 
 function snapTrainingReviewTime(rawTime) {
@@ -1948,6 +1963,49 @@ function cueTimeFromCanvasEvent(event) {
   return progress * Math.max(trainingCapture.duration, 0.001);
 }
 
+function cueHitThresholdSeconds() {
+  const rect = elements.liveSpectrum.getBoundingClientRect();
+  const secondsPerPixel = trainingCapture.duration / Math.max(rect.width, 1);
+  return Math.max(0.08, secondsPerPixel * 14);
+}
+
+function nearestCueHit(time) {
+  const threshold = cueHitThresholdSeconds();
+  const manual = trainingCapture.cues
+    .map((cue, index) => ({ type: "manual", cue, index, time: cue.time, distance: Math.abs(cue.time - time) }))
+    .filter((hit) => hit.distance <= threshold);
+  const automatic = trainingReviewAutomaticCueTimes()
+    .filter((cueTime) => cueTime > cueHitThresholdSeconds() && cueTime < trainingCapture.duration - cueHitThresholdSeconds())
+    .filter((cueTime) => !isSuppressedCueTime(cueTime))
+    .map((cueTime) => ({ type: "automatic", time: cueTime, distance: Math.abs(cueTime - time) }))
+    .filter((hit) => hit.distance <= threshold);
+  return [...manual, ...automatic].sort((left, right) => left.distance - right.distance)[0] ?? null;
+}
+
+function toggleTrainingCueAt(time) {
+  const hit = nearestCueHit(time);
+  if (hit?.type === "manual") {
+    const [removed] = trainingCapture.cues.splice(hit.index, 1);
+    if (selectedTrainingCueId === removed.id) selectedTrainingCueId = null;
+    updateCueEditor();
+    updateTrainingSummary();
+    redrawTrainingReview();
+    logEvent(`cue removed ${removed.name}`);
+    return;
+  }
+  if (hit?.type === "automatic") {
+    trainingCapture.suppressedCueTimes = [
+      ...(trainingCapture.suppressedCueTimes ?? []),
+      roundNumber(hit.time, 4),
+    ];
+    updateTrainingSummary();
+    redrawTrainingReview();
+    logEvent(`auto cue removed ${formatTime(Math.floor(hit.time))}`);
+    return;
+  }
+  addTrainingCue(time);
+}
+
 function addTrainingCue(time) {
   if (!canEditTrainingScene()) return;
   const cueTime = roundNumber(clamp(time, 0, trainingCapture.duration), 4);
@@ -2142,6 +2200,7 @@ function beginTrainingCapture(source) {
     active: true,
     frames: [],
     cues: [],
+    suppressedCueTimes: [],
     duration: selectedTrainingDuration(),
     reviewTime: 0,
     startedAt: audioContext?.currentTime ?? 0,
@@ -3006,7 +3065,7 @@ elements.liveSpectrum.addEventListener("click", (event) => {
 elements.liveSpectrum.addEventListener("contextmenu", (event) => {
   if (!canEditTrainingScene()) return;
   event.preventDefault();
-  addTrainingCue(snapTrainingReviewTime(cueTimeFromCanvasEvent(event)));
+  toggleTrainingCueAt(cueTimeFromCanvasEvent(event));
 });
 
 elements.reviewPlayButton?.addEventListener("click", () => {

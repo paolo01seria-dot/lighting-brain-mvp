@@ -75,6 +75,12 @@ const elements = {
   currentTimeLabel: document.querySelector("#currentTimeLabel"),
   durationLabel: document.querySelector("#durationLabel"),
   trainingMode: document.querySelector("#trainingMode"),
+  flatBulbMode: document.querySelector("#flatBulbMode"),
+  baseColorLayer: document.querySelector("#baseColorLayer"),
+  outerGlowLayer: document.querySelector("#outerGlowLayer"),
+  rimLayer: document.querySelector("#rimLayer"),
+  tinyHighlightLayer: document.querySelector("#tinyHighlightLayer"),
+  innerDepthLayer: document.querySelector("#innerDepthLayer"),
   trainingDuration: document.querySelector("#trainingDuration"),
   sampleTagInput: document.querySelector("#sampleTagInput"),
   currentSampleCategory: document.querySelector("#currentSampleCategory"),
@@ -186,6 +192,11 @@ function buildLights(count, keepPositions = true) {
     light.title = positionName(index);
     light.style.left = `${position.x}%`;
     light.style.top = `${position.y}%`;
+    ["bulb-base", "bulb-depth", "bulb-rim", "bulb-highlight"].forEach((className) => {
+      const layer = document.createElement("span");
+      layer.className = className;
+      light.appendChild(layer);
+    });
     const label = document.createElement("span");
     label.className = "light-label";
     label.textContent = positionName(index);
@@ -1114,17 +1125,10 @@ function renderLights() {
     const intensity = manual ? (manualBlackout ? 0 : 1) : clamp(state.intensity, 0, 1);
     const visible = intensity > 0.04;
     const phaseSplit = manual && (!phaseFirst || !phaseSecond);
-    const center = [
-      Math.min(255, Math.round(r + 18)),
-      Math.min(255, Math.round(g + 18)),
-      Math.min(255, Math.round(b + 18)),
-    ];
-    const edge = [
-      Math.max(0, Math.round(r * 0.72)),
-      Math.max(0, Math.round(g * 0.72)),
-      Math.max(0, Math.round(b * 0.72)),
-    ];
-    const lensFill = `radial-gradient(circle at 50% 50%, rgb(${center[0]}, ${center[1]}, ${center[2]}) 0 6%, rgb(${r}, ${g}, ${b}) 7% 82%, rgb(${edge[0]}, ${edge[1]}, ${edge[2]}) 100%)`;
+    const flatColor = `rgb(${r}, ${g}, ${b})`;
+    const lensFill = manualCasual
+      ? "url('assets/casual-color.jpg') center / cover"
+      : flatColor;
     const phaseColor = manualCasual
       ? "transparent"
       : `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
@@ -1135,14 +1139,22 @@ function renderLights() {
     const phaseLensFill = phaseSplit
       ? manualCasual
         ? `${phaseOffMask}, url('assets/casual-color.jpg') center / cover`
-        : `${phaseOffMask}, ${lensFill}`
+        : `linear-gradient(90deg, ${phaseFirst ? flatColor : phaseOff} 0 50%, ${phaseFirst ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 100%)`
       : "";
+    const flatBulbFill = visible && !manualBlackout
+      ? lensFill
+      : "";
+    const flatPhaseFill = phaseSplit
+      ? manualCasual
+        ? `${phaseOffMask}, url('assets/casual-color.jpg') center / cover`
+        : `linear-gradient(90deg, ${phaseFirst ? flatColor : phaseOff} 0 50%, ${phaseFirst ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 100%)`
+      : flatBulbFill;
     const leftPhaseButton = light.querySelector('[data-phase="first"]');
     const rightPhaseButton = light.querySelector('[data-phase="second"]');
 
     light.style.background = visible
       ? manualCasual
-        ? "radial-gradient(circle at 50% 44%, rgba(255, 255, 255, 0.38) 0 10%, rgba(0, 0, 0, 0.08) 11% 56%, rgba(0, 0, 0, 0.62) 74%), url('assets/casual-color.jpg') center / cover"
+        ? ""
         : phaseSplit
         ? ""
         : ""
@@ -1153,7 +1165,7 @@ function renderLights() {
       : "";
     light.style.setProperty("--beam", showGlow ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
     light.style.setProperty("--beam-opacity", showGlow ? String(intensity * 0.42) : "0");
-    light.style.setProperty("--lens-fill", visible && !manualCasual && !phaseSplit && !manualBlackout ? lensFill : "");
+    light.style.setProperty("--lens-fill", visible && !manualBlackout ? (phaseSplit ? phaseLensFill : lensFill) : "");
     if (phaseLensFill) {
       light.style.setProperty("--phase-lens-fill", phaseLensFill);
     } else {
@@ -1162,11 +1174,19 @@ function renderLights() {
     light.style.setProperty("--phase-left", phaseFirst ? phaseColor : phaseOff);
     light.style.setProperty("--phase-right", phaseSecond ? phaseColor : phaseOff);
     light.style.setProperty("--phase-button-color", `rgba(${r}, ${g}, ${b}, 0.88)`);
+    if (flatBulbFill) {
+      light.style.setProperty("--flat-bulb-fill", flatBulbFill);
+      light.style.setProperty("--flat-phase-fill", flatPhaseFill);
+    } else {
+      light.style.removeProperty("--flat-bulb-fill");
+      light.style.removeProperty("--flat-phase-fill");
+    }
     light.classList.toggle("active", intensity > 0.62);
     light.classList.toggle("manual", manual);
     light.classList.toggle("casual", manualCasual && !manualBlackout);
     light.classList.toggle("phase-split", phaseSplit);
     light.classList.toggle("blackout", manualBlackout);
+    light.classList.toggle("flat-visible", Boolean(flatBulbFill));
     leftPhaseButton?.classList.toggle("is-off", !phaseFirst || manualBlackout);
     rightPhaseButton?.classList.toggle("is-off", !phaseSecond || manualBlackout);
     leftPhaseButton?.classList.toggle("is-casual", manualCasual && !manualBlackout);
@@ -2189,6 +2209,14 @@ function isTrainingMode() {
   return Boolean(elements.trainingMode?.checked);
 }
 
+function updateLayerDebugFlags() {
+  document.body.classList.toggle("no-base-color", !elements.baseColorLayer.checked);
+  document.body.classList.toggle("no-outer-glow", !elements.outerGlowLayer.checked);
+  document.body.classList.toggle("no-rim", !elements.rimLayer.checked);
+  document.body.classList.toggle("no-tiny-highlight", !elements.tinyHighlightLayer.checked);
+  document.body.classList.toggle("no-inner-depth", !elements.innerDepthLayer.checked);
+}
+
 function canEditTrainingScene() {
   return isTrainingMode() && !trainingCapture.active && trainingCapture.frames.length > 0;
 }
@@ -3187,6 +3215,25 @@ elements.trainingMode.addEventListener("change", () => {
   logEvent(isTrainingMode() ? "training on" : "training off");
 });
 
+elements.flatBulbMode.addEventListener("change", () => {
+  document.body.classList.toggle("flat-bulb", elements.flatBulbMode.checked);
+  renderLights();
+  logEvent(elements.flatBulbMode.checked ? "flat bulb debug on" : "flat bulb debug off");
+});
+
+[
+  elements.baseColorLayer,
+  elements.outerGlowLayer,
+  elements.rimLayer,
+  elements.tinyHighlightLayer,
+  elements.innerDepthLayer,
+].forEach((control) => {
+  control.addEventListener("change", () => {
+    updateLayerDebugFlags();
+    renderLights();
+  });
+});
+
 elements.saveAnnotationButton.addEventListener("click", () => {
   saveTrainingAnnotation();
 });
@@ -3263,6 +3310,7 @@ function stopDrag(event) {
 }
 
 buildLights(Number(elements.lightCount.value), false);
+updateLayerDebugFlags();
 updateOutputMode();
 setInputMode(elements.inputSource.value);
 drawTrackOverview();

@@ -249,6 +249,37 @@ select {
   accent-color: var(--accent);
 }
 
+.fx-debug-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 38px;
+  margin: 0;
+  padding: 4px 8px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.fx-debug-controls legend {
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.fx-debug-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: auto;
+  font-size: 11px;
+}
+
+.fx-debug-controls input {
+  accent-color: var(--accent);
+}
+
 .training-duration-control {
   min-width: 96px;
   width: 96px;
@@ -639,6 +670,64 @@ button:disabled {
   transition: background 90ms linear, box-shadow 90ms linear, opacity 90ms linear, transform 90ms linear;
 }
 
+.bulb-base,
+.bulb-depth,
+.bulb-rim,
+.bulb-highlight {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.bulb-base {
+  inset: 0;
+  z-index: 2;
+  background: var(--lens-fill, transparent);
+  opacity: 0;
+}
+
+.bulb-depth {
+  inset: 0;
+  z-index: 3;
+  background: radial-gradient(circle at 50% 50%, transparent 0 62%, rgba(0, 0, 0, 0.16) 78%, rgba(0, 0, 0, 0.38) 100%);
+  opacity: 0;
+}
+
+.bulb-rim {
+  inset: 0;
+  z-index: 4;
+  border: 1px solid rgba(255, 255, 255, 0.36);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.22),
+    inset 0 -8px 14px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+}
+
+.bulb-highlight {
+  left: 24%;
+  top: 20%;
+  z-index: 5;
+  width: 9px;
+  height: 9px;
+  background: rgba(255, 255, 255, 0.38);
+  filter: blur(0.5px);
+  opacity: 0;
+}
+
+.light.flat-visible .bulb-base,
+.light.flat-visible .bulb-depth,
+.light.flat-visible .bulb-rim,
+.light.flat-visible .bulb-highlight {
+  opacity: 1;
+}
+
+.no-base-color .bulb-base,
+.no-inner-depth .bulb-depth,
+.no-rim .bulb-rim,
+.no-tiny-highlight .bulb-highlight {
+  display: none;
+}
+
 .light::before {
   content: "";
   position: absolute;
@@ -647,10 +736,14 @@ button:disabled {
   place-items: center;
   z-index: 2;
   border-radius: 50%;
-  background: var(--lens-fill, radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.04) 42%, rgba(0, 0, 0, 0.1) 78%));
-  box-shadow: inset 0 0 6px rgba(255, 255, 255, 0.035);
+  background: transparent;
+  box-shadow: none;
   clip-path: circle(50% at 50% 50%);
   pointer-events: none;
+}
+
+.light.flat-visible::before {
+  display: none;
 }
 
 .light::after {
@@ -662,6 +755,17 @@ button:disabled {
   opacity: var(--beam-opacity, 0);
   filter: blur(7px);
   z-index: 0;
+}
+
+.no-outer-glow .light {
+  box-shadow:
+    inset 0 2px 10px rgba(255, 255, 255, 0.18),
+    inset 0 -13px 22px rgba(0, 0, 0, 0.58),
+    0 5px 17px rgba(0, 0, 0, 0.46) !important;
+}
+
+.no-outer-glow .light::after {
+  display: none;
 }
 
 .light.dragging {
@@ -713,14 +817,35 @@ button:disabled {
     0 5px 17px rgba(0, 0, 0, 0.46) !important;
 }
 
+.flat-bulb .light.flat-visible {
+  border: 0;
+  background: var(--flat-bulb-fill) !important;
+  box-shadow: none !important;
+  filter: none;
+  mix-blend-mode: normal;
+}
+
+.flat-bulb .light.flat-visible::before,
+.flat-bulb .light.flat-visible::after {
+  display: none;
+}
+
+.flat-bulb .bulb-depth,
+.flat-bulb .bulb-rim,
+.flat-bulb .bulb-highlight {
+  display: none;
+}
+
+.flat-bulb .light.flat-visible.phase-split {
+  background: var(--flat-phase-fill, linear-gradient(90deg, var(--phase-left, rgb(0, 0, 0)) 0 50%, var(--phase-left, rgb(0, 0, 0)) 50%, var(--phase-right, rgb(0, 0, 0)) 50%, var(--phase-right, rgb(0, 0, 0)) 100%)) !important;
+}
+
 .light.phase-split::before {
   inset: 0;
   border-radius: 50%;
-  background: var(--phase-lens-fill, linear-gradient(90deg, var(--phase-left, rgba(0, 0, 0, 0.88)) 0 50%, var(--phase-left, rgba(0, 0, 0, 0.88)) 50%, var(--phase-right, rgba(0, 0, 0, 0.88)) 50%, var(--phase-right, rgba(0, 0, 0, 0.88)) 100%));
+  background: transparent;
   opacity: 1;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
-    inset 0 0 10px rgba(0, 0, 0, 0.42);
+  box-shadow: none;
 }
 
 .phase-button {

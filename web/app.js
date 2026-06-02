@@ -1823,6 +1823,33 @@ function applyLightSnapshot(snapshot) {
   return true;
 }
 
+function persistCurrentTrainingFrameScene() {
+  if (!canEditTrainingScene()) return null;
+  const time = currentPlaybackTime();
+  const frame = findTrainingFrameAt(time);
+  if (!frame) return null;
+  const scene = {
+    source: "user_scene",
+    edited_at: new Date().toISOString(),
+    time: roundNumber(frame.time, 4),
+    review_time: roundNumber(time, 4),
+    sample_category: frame.sample_category ?? null,
+    scene_category: `${frame.scene_category ?? "training_scene"}__user`,
+    intent: frame.intent ?? null,
+    dominant_component: frame.dominant_component ?? frame.clock_source ?? null,
+    energy_trend: frame.energy_trend ?? null,
+    light_snapshot: captureLightSnapshot(),
+  };
+  frame.user_scene = scene;
+  frame.final_scene = scene;
+  elements.currentSampleCategory.textContent = scene.sample_category ?? "-";
+  elements.currentSceneCategory.textContent = scene.scene_category ?? "-";
+  elements.currentIntent.textContent = scene.intent ?? "-";
+  elements.currentGesture.textContent = scene.dominant_component ?? "-";
+  elements.currentEnergyTrend.textContent = scene.energy_trend ?? "-";
+  return frame;
+}
+
 function drawComponentLanes(componentLanes, time, options = {}) {
   const canvas = elements.liveSpectrum;
   if (!canvas) return;
@@ -2367,16 +2394,17 @@ function applyTrainingReviewFrame(time) {
     if (candidate.time > trainingCapture.reviewTime) break;
     frame = candidate;
   }
-  elements.currentSampleCategory.textContent = frame.sample_category ?? "-";
-  elements.currentSceneCategory.textContent = frame.scene_category ?? "-";
-  elements.currentIntent.textContent = frame.intent ?? "-";
-  elements.currentGesture.textContent = frame.dominant_component ?? frame.clock_source ?? "-";
-  elements.currentEnergyTrend.textContent = frame.energy_trend ?? "-";
+  const finalScene = frame.final_scene ?? frame.user_scene ?? null;
+  elements.currentSampleCategory.textContent = finalScene?.sample_category ?? frame.sample_category ?? "-";
+  elements.currentSceneCategory.textContent = finalScene?.scene_category ?? frame.scene_category ?? "-";
+  elements.currentIntent.textContent = finalScene?.intent ?? frame.intent ?? "-";
+  elements.currentGesture.textContent = finalScene?.dominant_component ?? frame.dominant_component ?? frame.clock_source ?? "-";
+  elements.currentEnergyTrend.textContent = finalScene?.energy_trend ?? frame.energy_trend ?? "-";
   const cue = findTrainingCueAt(trainingCapture.reviewTime);
   if (cue) selectedTrainingCueId = cue.id;
   updateCueEditor();
   updateMeter(frame.energy ?? 0);
-  if (!applyLightSnapshot(frame.light_snapshot)) {
+  if (!applyLightSnapshot(finalScene?.light_snapshot ?? frame.light_snapshot)) {
     if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment") {
       blackoutLights();
     }
@@ -2530,6 +2558,7 @@ function cycleTrainingLight(index, direction = 1) {
     state.phaseSecondHalf = true;
   }
   renderLights();
+  persistCurrentTrainingFrameScene();
 }
 
 function cycleTrainingLightBackward(event) {
@@ -2587,6 +2616,7 @@ function toggleTrainingLightPhase(event) {
   }
   state.intensity = state.phaseFirstHalf || state.phaseSecondHalf ? 1 : 0;
   renderLights();
+  persistCurrentTrainingFrameScene();
 }
 
 function clearTrainingLights() {
@@ -2600,6 +2630,7 @@ function clearTrainingLights() {
     state.phaseSecondHalf = true;
   });
   renderLights();
+  persistCurrentTrainingFrameScene();
 }
 
 function saveTrainingAnnotation() {
@@ -2608,6 +2639,7 @@ function saveTrainingAnnotation() {
   const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
   const rhythmEvent = inputMode === "timeline" ? findTimelineRhythmEventAt(time) : null;
   const captureFrame = findTrainingFrameAt(time);
+  const finalScene = captureFrame?.final_scene ?? captureFrame?.user_scene ?? null;
   const cue = findTrainingCueAt(time);
   const annotation = {
     id: `mark_${String(trainingAnnotations.length + 1).padStart(3, "0")}`,
@@ -2622,11 +2654,11 @@ function saveTrainingAnnotation() {
       rhythm_split: cue.rhythm_split,
     } : null,
     brain: {
-      scene: sceneEvent?.scene ?? captureFrame?.scene_category ?? null,
-      sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? captureFrame?.sample_category ?? null,
+      scene: sceneEvent?.scene ?? finalScene?.scene_category ?? captureFrame?.scene_category ?? null,
+      sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? finalScene?.sample_category ?? captureFrame?.sample_category ?? null,
       genre_affinity: captureFrame?.genre ?? elements.genreProfile.value,
-      intent: sceneEvent?.intent ?? captureFrame?.intent ?? null,
-      rhythm_gesture: rhythmEvent?.gesture ?? captureFrame?.clock_source ?? null,
+      intent: sceneEvent?.intent ?? finalScene?.intent ?? captureFrame?.intent ?? null,
+      rhythm_gesture: rhythmEvent?.gesture ?? finalScene?.dominant_component ?? captureFrame?.clock_source ?? null,
       metadata: sceneEvent?.metadata ?? null,
     },
     desired_lights: lightStates.map((state, index) => {

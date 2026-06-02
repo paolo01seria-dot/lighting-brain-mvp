@@ -641,12 +641,13 @@ button:disabled {
 .light::before {
   content: "";
   position: absolute;
-  inset: 12px;
+  inset: 10px;
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.04) 42%, rgba(0, 0, 0, 0.1) 78%);
+  background: var(--lens-fill, radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.04) 42%, rgba(0, 0, 0, 0.1) 78%));
   box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.08);
+  clip-path: circle(50% at 50% 50%);
   pointer-events: none;
 }
 
@@ -693,10 +694,6 @@ button:disabled {
 .is-training-edit .light {
   outline: 1px solid rgba(79, 195, 177, 0.45);
   outline-offset: 4px;
-}
-
-.light.active::before {
-  background: radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.1) 46%, transparent 80%);
 }
 
 .light.manual {

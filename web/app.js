@@ -1114,7 +1114,10 @@ function renderLights() {
     const intensity = manual ? (manualBlackout ? 0 : 1) : clamp(state.intensity, 0, 1);
     const visible = intensity > 0.04;
     const phaseSplit = manual && (!phaseFirst || !phaseSecond);
-    const phaseColor = `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
+    const lensFill = `radial-gradient(circle at 50% 42%, rgba(255, 255, 255, ${0.36 + intensity * 0.34}) 0 11%, rgba(${r}, ${g}, ${b}, ${0.52 + intensity * 0.43}) 12% 58%, rgba(${r}, ${g}, ${b}, ${0.18 + intensity * 0.34}) 59% 100%)`;
+    const phaseColor = manualCasual
+      ? "rgba(245, 247, 248, 0.92)"
+      : `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
     const phaseOff = "rgba(0, 0, 0, 0.96)";
     const partialPhase = manual && activePhaseCount === 1;
     const showGlow = visible && !partialPhase && !manualBlackout;
@@ -1125,8 +1128,8 @@ function renderLights() {
       ? manualCasual
         ? "radial-gradient(circle at 50% 44%, rgba(255, 255, 255, 0.38) 0 10%, rgba(0, 0, 0, 0.08) 11% 56%, rgba(0, 0, 0, 0.62) 74%), url('assets/casual-color.jpg') center / cover"
         : phaseSplit
-        ? "radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.18) 0 10%, rgba(255, 255, 255, 0.06) 11% 29%, rgba(0, 0, 0, 0.42) 30% 64%, rgba(0, 0, 0, 0.82) 65%), linear-gradient(145deg, rgba(255, 255, 255, 0.13), rgba(4, 6, 7, 0.9) 48%, rgba(255, 255, 255, 0.07))"
-        : `radial-gradient(circle at 50% 44%, rgba(255, 255, 255, ${0.18 + intensity * 0.42}) 0 12%, rgba(${r}, ${g}, ${b}, ${0.34 + intensity * 0.58}) 13% 48%, rgba(${r}, ${g}, ${b}, ${0.12 + intensity * 0.22}) 49% 72%, rgba(0, 0, 0, 0.58) 73%)`
+        ? ""
+        : ""
       : "";
     light.style.opacity = visible ? (0.24 + intensity * 0.76).toFixed(3) : "0.82";
     light.style.boxShadow = showGlow
@@ -1134,6 +1137,7 @@ function renderLights() {
       : "";
     light.style.setProperty("--beam", showGlow ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
     light.style.setProperty("--beam-opacity", showGlow ? String(intensity * 0.42) : "0");
+    light.style.setProperty("--lens-fill", visible && !manualCasual && !phaseSplit && !manualBlackout ? lensFill : "");
     light.style.setProperty("--phase-left", phaseFirst ? phaseColor : phaseOff);
     light.style.setProperty("--phase-right", phaseSecond ? phaseColor : phaseOff);
     light.style.setProperty("--phase-button-color", `rgba(${r}, ${g}, ${b}, 0.88)`);

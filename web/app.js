@@ -121,6 +121,7 @@ let reviewAnimationFrame;
 let reviewAudioSource;
 let reviewAudioElement;
 let reviewAudioObjectUrl;
+let reviewAudioUsesOriginalElement = false;
 let reviewPlaybackStartedAt = 0;
 let reviewPlaybackStartTime = 0;
 let isPlaying = false;
@@ -456,6 +457,10 @@ function ensureAudioElement() {
     audioElement = new Audio();
     audioElement.preload = "auto";
     audioElement.addEventListener("ended", () => {
+      if (reviewAnimationFrame && reviewAudioUsesOriginalElement) {
+        pauseTrainingReviewPlayback();
+        return;
+      }
       stopPlayback({ resetPosition: true });
     });
     audioElement.addEventListener("loadedmetadata", updatePlayerTime);
@@ -1493,6 +1498,12 @@ function currentPlaybackTime() {
       ? clamp(audioContext.currentTime - timelineStartedAt, 0, timelineDuration)
       : clamp(timelinePausedAt, 0, timelineDuration);
   }
+  if (inputMode === "file" && trainingReviewAvailable() && !isPlaying) {
+    if (reviewAnimationFrame && reviewAudioUsesOriginalElement && audioElement) {
+      return clamp(audioElement.currentTime || trainingCapture.reviewTime, 0, trainingCapture.duration);
+    }
+    return clamp(trainingCapture.reviewTime, 0, trainingCapture.duration);
+  }
   if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length) {
     return clamp(trainingCapture.reviewTime, 0, trainingCapture.duration);
   }
@@ -1508,13 +1519,14 @@ function currentPlaybackTime() {
 
 function updatePlayerTime() {
   const current = currentPlaybackTime();
+  const reviewMode = trainingReviewAvailable() && (inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio");
   const liveReview = (inputMode === "mic_device" || inputMode === "system_audio") && trainingCapture.frames.length;
-  const duration = liveReview ? trainingCapture.duration : inputMode === "mic_device" || inputMode === "system_audio" ? 0 : getAudioDuration();
+  const duration = reviewMode ? trainingCapture.duration : inputMode === "mic_device" || inputMode === "system_audio" ? 0 : getAudioDuration();
   elements.currentTimeLabel.textContent = formatTime(Math.floor(current));
-  elements.durationLabel.textContent = (inputMode === "mic_device" || inputMode === "system_audio") && !liveReview ? "live" : formatTime(Math.floor(duration));
+  elements.durationLabel.textContent = (inputMode === "mic_device" || inputMode === "system_audio") && !reviewMode ? "live" : formatTime(Math.floor(duration));
   drawOverviewPlayhead(current, duration);
   updateTrainingReadout(current);
-  if (liveReview && !isPlaying) {
+  if (reviewMode && !isPlaying) {
     elements.seekSlider.disabled = false;
     elements.seekSlider.value = String(Math.round((current / Math.max(duration, 0.001)) * 1000));
     return;
@@ -1534,7 +1546,7 @@ function updatePlayerTime() {
 }
 
 function updateTrainingReadout(time) {
-  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && applyTrainingReviewFrame(time)) {
+  if ((inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && applyTrainingReviewFrame(time)) {
     return;
   }
   const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
@@ -2202,6 +2214,18 @@ async function seekToSliderValue(value) {
     updatePlayerTime();
     return;
   }
+  if (inputMode === "file" && !isPlaying && trainingReviewAvailable()) {
+    pauseTrainingReviewPlayback();
+    const rawTime = (Number(value) / 1000) * trainingCapture.duration;
+    const time = snapTrainingReviewTime(rawTime);
+    if (audioElement) {
+      audioElement.currentTime = clamp(time, 0, getAudioDuration());
+    }
+    applyTrainingReviewFrame(time);
+    redrawTrainingReview();
+    updatePlayerTime();
+    return;
+  }
   if (!hasLoadedAudio() || inputMode !== "file") return;
   const wasPlaying = isPlaying;
   pausedAt = (Number(value) / 1000) * getAudioDuration();
@@ -2414,7 +2438,7 @@ function applyTrainingReviewFrame(time) {
 
 function updateReviewPlayButton() {
   if (!elements.reviewPlayButton) return;
-  const enabled = trainingReviewAvailable() && (inputMode === "mic_device" || inputMode === "system_audio");
+  const enabled = trainingReviewAvailable() && (inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio");
   elements.reviewPlayButton.disabled = !enabled;
   elements.reviewPlayButton.textContent = reviewAnimationFrame ? "⏸" : "▶";
 }
@@ -2428,6 +2452,16 @@ function pauseTrainingReviewPlayback() {
   updateReviewPlayButton();
 }
 
+function currentReviewAudioTime() {
+  if (reviewAudioUsesOriginalElement && audioElement) {
+    return clamp(audioElement.currentTime || 0, 0, trainingCapture.duration);
+  }
+  if (reviewAudioElement) {
+    return clamp(reviewAudioElement.currentTime || 0, 0, trainingCapture.duration);
+  }
+  return null;
+}
+
 async function toggleTrainingReviewPlayback() {
   if (!trainingReviewAvailable() || isPlaying) return;
   if (reviewAnimationFrame) {
@@ -2435,11 +2469,11 @@ async function toggleTrainingReviewPlayback() {
     return;
   }
   reviewPlaybackStartTime = trainingCapture.reviewTime ?? 0;
+  const audioStarted = await startReviewAudioAt(reviewPlaybackStartTime);
   reviewPlaybackStartedAt = performance.now();
-  await startReviewAudioAt(reviewPlaybackStartTime);
   const animateReview = () => {
     const elapsed = (performance.now() - reviewPlaybackStartedAt) / 1000;
-    const rawTime = reviewPlaybackStartTime + elapsed;
+    const rawTime = audioStarted ? currentReviewAudioTime() ?? reviewPlaybackStartTime + elapsed : reviewPlaybackStartTime + elapsed;
     const time = snapTrainingReviewTime(rawTime);
     applyTrainingReviewFrame(time);
     redrawTrainingReview();
@@ -2455,6 +2489,13 @@ async function toggleTrainingReviewPlayback() {
 }
 
 function stopReviewAudioSource() {
+  if (reviewAudioUsesOriginalElement) {
+    if (audioElement) {
+      pausedAt = clamp(audioElement.currentTime || 0, 0, getAudioDuration());
+      audioElement.pause();
+    }
+    reviewAudioUsesOriginalElement = false;
+  }
   if (reviewAudioElement) {
     reviewAudioElement.pause();
     reviewAudioElement.removeAttribute("src");
@@ -2480,9 +2521,29 @@ function stopReviewAudioSource() {
 
 async function startReviewAudioAt(time) {
   stopReviewAudioSource();
+  if (inputMode === "file") {
+    if (!audioElement?.src) {
+      logEvent("review audio missing");
+      return false;
+    }
+    await ensureAudioContext();
+    if (audioContext?.state === "suspended") {
+      await audioContext.resume();
+    }
+    audioElement.currentTime = clamp(time, 0, getAudioDuration());
+    reviewAudioUsesOriginalElement = true;
+    try {
+      await audioElement.play();
+      return true;
+    } catch (_error) {
+      reviewAudioUsesOriginalElement = false;
+      logEvent("review audio missing");
+      return false;
+    }
+  }
   if (!trainingCapture.audioSamples?.length || !trainingCapture.audioSampleRate) {
-    logEvent("review audio missing: record a new training take");
-    return;
+    logEvent("review audio missing");
+    return false;
   }
   if (audioContext?.state === "suspended") {
     await audioContext.resume();
@@ -2505,6 +2566,7 @@ async function startReviewAudioAt(time) {
   });
   reviewAudioElement.currentTime = offset;
   await reviewAudioElement.play();
+  return true;
 }
 
 function audioSamplesToWavBlob(samples, sampleRate) {

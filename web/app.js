@@ -1114,15 +1114,18 @@ function renderLights() {
     const intensity = manual ? (manualBlackout ? 0 : 1) : clamp(state.intensity, 0, 1);
     const visible = intensity > 0.04;
     const phaseSplit = manual && (!phaseFirst || !phaseSecond);
-    const lensFill = `radial-gradient(circle at 50% 42%, rgba(255, 255, 255, ${0.32 + intensity * 0.24}) 0 8%, rgba(${r}, ${g}, ${b}, ${0.58 + intensity * 0.38}) 9% 68%, rgba(${r}, ${g}, ${b}, ${0.24 + intensity * 0.42}) 69% 100%)`;
+    const lensFill = `radial-gradient(circle at 50% 50%, rgba(255, 255, 255, ${0.22 + intensity * 0.18}) 0 5%, rgba(${r}, ${g}, ${b}, ${0.7 + intensity * 0.3}) 6% 76%, rgba(${r}, ${g}, ${b}, ${0.36 + intensity * 0.44}) 77% 100%)`;
     const phaseColor = manualCasual
       ? "transparent"
       : `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
     const phaseOff = "rgba(0, 0, 0, 0.96)";
     const partialPhase = manual && activePhaseCount === 1;
     const showGlow = visible && !manualBlackout;
-    const casualPhaseMask = manualCasual && phaseSplit
-      ? `linear-gradient(90deg, ${phaseFirst ? "transparent" : phaseOff} 0 50%, ${phaseFirst ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 100%), url('assets/casual-color.jpg') center / cover`
+    const phaseOffMask = `linear-gradient(90deg, ${phaseFirst ? "transparent" : phaseOff} 0 50%, ${phaseFirst ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 100%)`;
+    const phaseLensFill = phaseSplit
+      ? manualCasual
+        ? `${phaseOffMask}, url('assets/casual-color.jpg') center / cover`
+        : `${phaseOffMask}, ${lensFill}`
       : "";
     const leftPhaseButton = light.querySelector('[data-phase="first"]');
     const rightPhaseButton = light.querySelector('[data-phase="second"]');
@@ -1141,8 +1144,8 @@ function renderLights() {
     light.style.setProperty("--beam", showGlow ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
     light.style.setProperty("--beam-opacity", showGlow ? String(intensity * 0.42) : "0");
     light.style.setProperty("--lens-fill", visible && !manualCasual && !phaseSplit && !manualBlackout ? lensFill : "");
-    if (casualPhaseMask) {
-      light.style.setProperty("--phase-lens-fill", casualPhaseMask);
+    if (phaseLensFill) {
+      light.style.setProperty("--phase-lens-fill", phaseLensFill);
     } else {
       light.style.removeProperty("--phase-lens-fill");
     }

@@ -126,6 +126,7 @@ let reviewPlaybackStartedAt = 0;
 let reviewPlaybackStartTime = 0;
 let isPlaying = false;
 let inputMode = "system_audio";
+let lastTrainingAudioDebugAt = -1;
 let overviewCacheCanvas;
 let previousSpectrum;
 let sceneVariant = 0;
@@ -1274,7 +1275,12 @@ function maybeLogLiveFrame(frame) {
   const second = Math.floor(Number(frame.time ?? 0));
   if (second === lastEventSecond || second % 2 !== 0) return;
   lastEventSecond = second;
-  logEvent(`${formatTime(second)} live ${frame.sample_category ?? "unknown"} energy:${Math.round((frame.energy ?? 0) * 100)}%`);
+  const audioSamples = Array.isArray(frame.audio_samples) ? frame.audio_samples.length : 0;
+  logEvent(
+    `${formatTime(second)} live ${frame.sample_category ?? "unknown"} `
+    + `energy:${Math.round((frame.energy ?? 0) * 100)}% `
+    + `pcm:${audioSamples}@${frame.audio_sample_rate ?? "-"}`
+  );
 }
 
 function maybeLogSignal(energy) {
@@ -2285,6 +2291,7 @@ function selectedTrainingDuration() {
 function beginTrainingCapture(source) {
   if (!isTrainingMode()) return;
   pauseTrainingReviewPlayback();
+  lastTrainingAudioDebugAt = -1;
   if (elements.spectrumScroller) {
     elements.spectrumScroller.scrollLeft = 0;
   }
@@ -2312,6 +2319,9 @@ function beginTrainingCapture(source) {
 function stopTrainingCapture(reason = "stopped") {
   if (!trainingCapture.active) return;
   trainingCapture.active = false;
+  const audioDuration = trainingCapture.audioSampleRate
+    ? trainingCapture.audioSamples.length / trainingCapture.audioSampleRate
+    : 0;
   trainingCapture.reviewTime = 0;
   elements.seekSlider.disabled = !trainingCapture.frames.length;
   updateTrainingSummary();
@@ -2320,7 +2330,12 @@ function stopTrainingCapture(reason = "stopped") {
     applyTrainingReviewFrame(0);
     redrawTrainingReview();
   }
-  logEvent(`training ${reason}: ${trainingCapture.frames.length} frames`);
+  logEvent(
+    `training ${reason}: ${trainingCapture.frames.length} frames, `
+    + `audioSamples:${trainingCapture.audioSamples.length}, `
+    + `audioSampleRate:${trainingCapture.audioSampleRate ?? "-"}, `
+    + `audioDuration:${roundNumber(audioDuration, 2)}s`
+  );
 }
 
 function maybeFinishTrainingCapture(time) {
@@ -2376,14 +2391,34 @@ function captureTrainingFrame(reading) {
 
 function captureTrainingAudio(frame) {
   if (!trainingCapture.active) return;
+  const liveCapture = trainingCapture.source === "python_live_audio" || inputMode === "system_audio";
+  if (!liveCapture && trainingCapture.source !== "mic_device") return;
   const samples = Array.isArray(frame.audio_samples) ? frame.audio_samples : [];
   const sampleRate = Number(frame.audio_sample_rate);
+  const frameTime = Number(frame.time ?? 0);
+  const shouldDebug = liveCapture && (lastTrainingAudioDebugAt < 0 || frameTime - lastTrainingAudioDebugAt >= 2);
+  if (shouldDebug) {
+    logEvent(
+      `capture audio active:${trainingCapture.active} source:${trainingCapture.source} `
+      + `frameSamples:${samples.length} frameRate:${Number.isFinite(sampleRate) ? sampleRate : "-"} `
+      + `total:${trainingCapture.audioSamples.length}`
+    );
+    lastTrainingAudioDebugAt = frameTime;
+  }
   if (!samples.length || !Number.isFinite(sampleRate) || sampleRate <= 0) return;
   if (!trainingCapture.audioSampleRate) {
     trainingCapture.audioSampleRate = sampleRate;
   }
-  if (trainingCapture.audioSampleRate !== sampleRate) return;
+  if (trainingCapture.audioSampleRate !== sampleRate) {
+    if (liveCapture) {
+      logEvent(`capture audio samplerate mismatch frame:${sampleRate} capture:${trainingCapture.audioSampleRate}`);
+    }
+    return;
+  }
   trainingCapture.audioSamples.push(...samples.map((sample) => clamp(Number(sample), -1, 1)));
+  if (shouldDebug) {
+    logEvent(`capture audio appended total:${trainingCapture.audioSamples.length}`);
+  }
 }
 
 function sceneCategoryForSample(category, sceneChanged) {
@@ -2555,7 +2590,12 @@ async function startReviewAudioAt(time) {
     }
   }
   if (!trainingCapture.audioSamples?.length || !trainingCapture.audioSampleRate) {
-    logEvent("review audio missing");
+    logEvent(
+      "review audio missing: no PCM captured from Python live audio "
+      + `(source:${trainingCapture.source ?? "-"} input:${inputMode} `
+      + `frames:${trainingCapture.frames.length} samples:${trainingCapture.audioSamples?.length ?? 0} `
+      + `rate:${trainingCapture.audioSampleRate ?? "-"})`
+    );
     return false;
   }
   if (audioContext?.state === "suspended") {

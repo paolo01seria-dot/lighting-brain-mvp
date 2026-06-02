@@ -1,6 +1,7 @@
 import argparse
 import json
 import queue
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -62,6 +63,7 @@ def make_server(args):
       previous_energy = 0.0
       previous_bands = [0.0] * 16
       started_at = time.monotonic()
+      last_debug_at = 0.0
 
       def callback(indata, _frames, _time_info, status):
         if status:
@@ -91,13 +93,32 @@ def make_server(args):
           blocksize=args.blocksize,
           callback=callback,
         ):
+          print(
+            f"[live-audio] device={device_index if device_index is not None else 'default'} "
+            f"samplerate={samplerate} blocksize={args.blocksize}",
+            file=sys.stderr,
+            flush=True,
+          )
           while not stop_event.is_set():
             samples = frames.get(timeout=1.0)
+            audio_sample_rate = review_audio_samplerate(samplerate)
+            audio_samples = review_audio_samples(samples, samplerate)
             energy = min(1.0, rms_level(samples) * args.gain)
             bands = band_levels(samples, samplerate, 16)
             flux = sum(max(0.0, band - previous_bands[index]) for index, band in enumerate(bands)) / len(bands)
             category = classify_live_frame(energy, previous_energy, bands)
             component_lanes = component_lane_levels(bands, flux, energy)
+            now = time.monotonic()
+            if now - last_debug_at >= 2.0:
+              print(
+                f"[live-audio] device={device_index if device_index is not None else 'default'} "
+                f"samplerate={samplerate} blocksize={args.blocksize} "
+                f"len(samples)={len(samples)} len(audio_samples)={len(audio_samples)} "
+                f"audio_sample_rate={audio_sample_rate}",
+                file=sys.stderr,
+                flush=True,
+              )
+              last_debug_at = now
             event = {
               "time": round(time.monotonic() - started_at, 4),
               "energy": round(energy, 4),
@@ -107,8 +128,8 @@ def make_server(args):
               "sample_category": category,
               "component_lanes": component_lanes,
               "spectrum": [round(value, 4) for value in bands],
-              "audio_sample_rate": review_audio_samplerate(samplerate),
-              "audio_samples": review_audio_samples(samples, samplerate),
+              "audio_sample_rate": audio_sample_rate,
+              "audio_samples": audio_samples,
               "spectral_flux": round(flux, 4),
               "source": "sounddevice",
             }

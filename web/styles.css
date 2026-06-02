@@ -648,7 +648,7 @@ button:disabled {
   z-index: 2;
   border-radius: 50%;
   background: var(--lens-fill, radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.04) 42%, rgba(0, 0, 0, 0.1) 78%));
-  box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 6px rgba(255, 255, 255, 0.035);
   clip-path: circle(50% at 50% 50%);
   pointer-events: none;
 }
@@ -719,8 +719,8 @@ button:disabled {
   background: var(--phase-lens-fill, linear-gradient(90deg, var(--phase-left, rgba(0, 0, 0, 0.88)) 0 50%, var(--phase-left, rgba(0, 0, 0, 0.88)) 50%, var(--phase-right, rgba(0, 0, 0, 0.88)) 50%, var(--phase-right, rgba(0, 0, 0, 0.88)) 100%));
   opacity: 1;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-    inset 0 0 12px rgba(0, 0, 0, 0.5);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    inset 0 0 10px rgba(0, 0, 0, 0.42);
 }
 
 .phase-button {

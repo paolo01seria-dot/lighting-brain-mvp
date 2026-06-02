@@ -1114,7 +1114,17 @@ function renderLights() {
     const intensity = manual ? (manualBlackout ? 0 : 1) : clamp(state.intensity, 0, 1);
     const visible = intensity > 0.04;
     const phaseSplit = manual && (!phaseFirst || !phaseSecond);
-    const lensFill = `radial-gradient(circle at 50% 50%, rgba(255, 255, 255, ${0.22 + intensity * 0.18}) 0 5%, rgba(${r}, ${g}, ${b}, ${0.7 + intensity * 0.3}) 6% 76%, rgba(${r}, ${g}, ${b}, ${0.36 + intensity * 0.44}) 77% 100%)`;
+    const center = [
+      Math.min(255, Math.round(r + 18)),
+      Math.min(255, Math.round(g + 18)),
+      Math.min(255, Math.round(b + 18)),
+    ];
+    const edge = [
+      Math.max(0, Math.round(r * 0.72)),
+      Math.max(0, Math.round(g * 0.72)),
+      Math.max(0, Math.round(b * 0.72)),
+    ];
+    const lensFill = `radial-gradient(circle at 50% 50%, rgb(${center[0]}, ${center[1]}, ${center[2]}) 0 6%, rgb(${r}, ${g}, ${b}) 7% 82%, rgb(${edge[0]}, ${edge[1]}, ${edge[2]}) 100%)`;
     const phaseColor = manualCasual
       ? "transparent"
       : `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
@@ -1137,7 +1147,7 @@ function renderLights() {
         ? ""
         : ""
       : "";
-    light.style.opacity = visible ? (0.24 + intensity * 0.76).toFixed(3) : "0.82";
+    light.style.opacity = visible ? "1" : "0.82";
     light.style.boxShadow = showGlow
       ? `0 0 ${Math.round(10 + intensity * 54)}px rgba(${r}, ${g}, ${b}, ${intensity * 0.84})`
       : "";

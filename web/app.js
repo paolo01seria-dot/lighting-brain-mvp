@@ -1118,7 +1118,7 @@ function renderLights() {
     const phaseColor = manualCasual
       ? "transparent"
       : `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
-    const phaseOff = "rgba(0, 0, 0, 0.96)";
+    const phaseOff = "rgb(0, 0, 0)";
     const partialPhase = manual && activePhaseCount === 1;
     const showGlow = visible && !manualBlackout;
     const phaseOffMask = `linear-gradient(90deg, ${phaseFirst ? "transparent" : phaseOff} 0 50%, ${phaseFirst ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 100%)`;

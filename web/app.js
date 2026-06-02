@@ -1114,13 +1114,16 @@ function renderLights() {
     const intensity = manual ? (manualBlackout ? 0 : 1) : clamp(state.intensity, 0, 1);
     const visible = intensity > 0.04;
     const phaseSplit = manual && (!phaseFirst || !phaseSecond);
-    const lensFill = `radial-gradient(circle at 50% 42%, rgba(255, 255, 255, ${0.36 + intensity * 0.34}) 0 11%, rgba(${r}, ${g}, ${b}, ${0.52 + intensity * 0.43}) 12% 58%, rgba(${r}, ${g}, ${b}, ${0.18 + intensity * 0.34}) 59% 100%)`;
+    const lensFill = `radial-gradient(circle at 50% 42%, rgba(255, 255, 255, ${0.32 + intensity * 0.24}) 0 8%, rgba(${r}, ${g}, ${b}, ${0.58 + intensity * 0.38}) 9% 68%, rgba(${r}, ${g}, ${b}, ${0.24 + intensity * 0.42}) 69% 100%)`;
     const phaseColor = manualCasual
-      ? "rgba(245, 247, 248, 0.92)"
+      ? "transparent"
       : `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
     const phaseOff = "rgba(0, 0, 0, 0.96)";
     const partialPhase = manual && activePhaseCount === 1;
-    const showGlow = visible && !partialPhase && !manualBlackout;
+    const showGlow = visible && !manualBlackout;
+    const casualPhaseMask = manualCasual && phaseSplit
+      ? `linear-gradient(90deg, ${phaseFirst ? "transparent" : phaseOff} 0 50%, ${phaseFirst ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 100%), url('assets/casual-color.jpg') center / cover`
+      : "";
     const leftPhaseButton = light.querySelector('[data-phase="first"]');
     const rightPhaseButton = light.querySelector('[data-phase="second"]');
 
@@ -1138,6 +1141,11 @@ function renderLights() {
     light.style.setProperty("--beam", showGlow ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
     light.style.setProperty("--beam-opacity", showGlow ? String(intensity * 0.42) : "0");
     light.style.setProperty("--lens-fill", visible && !manualCasual && !phaseSplit && !manualBlackout ? lensFill : "");
+    if (casualPhaseMask) {
+      light.style.setProperty("--phase-lens-fill", casualPhaseMask);
+    } else {
+      light.style.removeProperty("--phase-lens-fill");
+    }
     light.style.setProperty("--phase-left", phaseFirst ? phaseColor : phaseOff);
     light.style.setProperty("--phase-right", phaseSecond ? phaseColor : phaseOff);
     light.style.setProperty("--phase-button-color", `rgba(${r}, ${g}, ${b}, 0.88)`);
@@ -1148,6 +1156,8 @@ function renderLights() {
     light.classList.toggle("blackout", manualBlackout);
     leftPhaseButton?.classList.toggle("is-off", !phaseFirst || manualBlackout);
     rightPhaseButton?.classList.toggle("is-off", !phaseSecond || manualBlackout);
+    leftPhaseButton?.classList.toggle("is-casual", manualCasual && !manualBlackout);
+    rightPhaseButton?.classList.toggle("is-casual", manualCasual && !manualBlackout);
     leftPhaseButton?.classList.toggle("is-selected", partialPhase && phaseFirst && !manualBlackout);
     rightPhaseButton?.classList.toggle("is-selected", partialPhase && phaseSecond && !manualBlackout);
   });

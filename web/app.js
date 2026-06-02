@@ -1498,7 +1498,7 @@ function currentPlaybackTime() {
       ? clamp(audioContext.currentTime - timelineStartedAt, 0, timelineDuration)
       : clamp(timelinePausedAt, 0, timelineDuration);
   }
-  if (inputMode === "file" && trainingReviewAvailable() && !isPlaying) {
+  if (trainingReviewUsesOriginalFileAudio() && !isPlaying) {
     if (reviewAnimationFrame && reviewAudioUsesOriginalElement && audioElement) {
       return clamp(audioElement.currentTime || trainingCapture.reviewTime, 0, trainingCapture.duration);
     }
@@ -1519,8 +1519,7 @@ function currentPlaybackTime() {
 
 function updatePlayerTime() {
   const current = currentPlaybackTime();
-  const reviewMode = trainingReviewAvailable() && (inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio");
-  const liveReview = (inputMode === "mic_device" || inputMode === "system_audio") && trainingCapture.frames.length;
+  const reviewMode = trainingReviewModeActive();
   const duration = reviewMode ? trainingCapture.duration : inputMode === "mic_device" || inputMode === "system_audio" ? 0 : getAudioDuration();
   elements.currentTimeLabel.textContent = formatTime(Math.floor(current));
   elements.durationLabel.textContent = (inputMode === "mic_device" || inputMode === "system_audio") && !reviewMode ? "live" : formatTime(Math.floor(duration));
@@ -1546,7 +1545,7 @@ function updatePlayerTime() {
 }
 
 function updateTrainingReadout(time) {
-  if ((inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && applyTrainingReviewFrame(time)) {
+  if (trainingReviewModeActive() && !isPlaying && applyTrainingReviewFrame(time)) {
     return;
   }
   const sceneEvent = inputMode === "timeline" ? findTimelineEventAt(time) : null;
@@ -1765,6 +1764,18 @@ function shouldDrawBeatPulse(time) {
 
 function trainingReviewAvailable() {
   return !trainingCapture.active && trainingCapture.frames.length > 0;
+}
+
+function trainingReviewUsesOriginalFileAudio() {
+  return trainingReviewAvailable()
+    && trainingCapture.source === "file"
+    && hasLoadedAudio()
+    && Boolean(audioElement?.src);
+}
+
+function trainingReviewModeActive() {
+  return trainingReviewAvailable()
+    && (trainingReviewUsesOriginalFileAudio() || inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio");
 }
 
 function trainingReviewCueTimes() {
@@ -2214,7 +2225,7 @@ async function seekToSliderValue(value) {
     updatePlayerTime();
     return;
   }
-  if (inputMode === "file" && !isPlaying && trainingReviewAvailable()) {
+  if (trainingReviewUsesOriginalFileAudio() && !isPlaying) {
     pauseTrainingReviewPlayback();
     const rawTime = (Number(value) / 1000) * trainingCapture.duration;
     const time = snapTrainingReviewTime(rawTime);
@@ -2438,7 +2449,9 @@ function applyTrainingReviewFrame(time) {
 
 function updateReviewPlayButton() {
   if (!elements.reviewPlayButton) return;
-  const enabled = trainingReviewAvailable() && (inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio");
+  const enabled = trainingReviewUsesOriginalFileAudio()
+    || (trainingReviewAvailable() && (inputMode === "mic_device" || inputMode === "system_audio"))
+    || (trainingReviewAvailable() && inputMode === "file" && hasLoadedAudio());
   elements.reviewPlayButton.disabled = !enabled;
   elements.reviewPlayButton.textContent = reviewAnimationFrame ? "⏸" : "▶";
 }
@@ -2521,7 +2534,7 @@ function stopReviewAudioSource() {
 
 async function startReviewAudioAt(time) {
   stopReviewAudioSource();
-  if (inputMode === "file") {
+  if (trainingReviewUsesOriginalFileAudio() || (inputMode === "file" && hasLoadedAudio())) {
     if (!audioElement?.src) {
       logEvent("review audio missing");
       return false;

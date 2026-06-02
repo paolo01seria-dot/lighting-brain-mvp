@@ -75,12 +75,6 @@ const elements = {
   currentTimeLabel: document.querySelector("#currentTimeLabel"),
   durationLabel: document.querySelector("#durationLabel"),
   trainingMode: document.querySelector("#trainingMode"),
-  flatBulbMode: document.querySelector("#flatBulbMode"),
-  baseColorLayer: document.querySelector("#baseColorLayer"),
-  outerGlowLayer: document.querySelector("#outerGlowLayer"),
-  rimLayer: document.querySelector("#rimLayer"),
-  tinyHighlightLayer: document.querySelector("#tinyHighlightLayer"),
-  innerDepthLayer: document.querySelector("#innerDepthLayer"),
   trainingDuration: document.querySelector("#trainingDuration"),
   sampleTagInput: document.querySelector("#sampleTagInput"),
   currentSampleCategory: document.querySelector("#currentSampleCategory"),
@@ -2209,14 +2203,6 @@ function isTrainingMode() {
   return Boolean(elements.trainingMode?.checked);
 }
 
-function updateLayerDebugFlags() {
-  document.body.classList.toggle("no-base-color", !elements.baseColorLayer.checked);
-  document.body.classList.toggle("no-outer-glow", !elements.outerGlowLayer.checked);
-  document.body.classList.toggle("no-rim", !elements.rimLayer.checked);
-  document.body.classList.toggle("no-tiny-highlight", !elements.tinyHighlightLayer.checked);
-  document.body.classList.toggle("no-inner-depth", !elements.innerDepthLayer.checked);
-}
-
 function canEditTrainingScene() {
   return isTrainingMode() && !trainingCapture.active && trainingCapture.frames.length > 0;
 }
@@ -3215,25 +3201,6 @@ elements.trainingMode.addEventListener("change", () => {
   logEvent(isTrainingMode() ? "training on" : "training off");
 });
 
-elements.flatBulbMode.addEventListener("change", () => {
-  document.body.classList.toggle("flat-bulb", elements.flatBulbMode.checked);
-  renderLights();
-  logEvent(elements.flatBulbMode.checked ? "flat bulb debug on" : "flat bulb debug off");
-});
-
-[
-  elements.baseColorLayer,
-  elements.outerGlowLayer,
-  elements.rimLayer,
-  elements.tinyHighlightLayer,
-  elements.innerDepthLayer,
-].forEach((control) => {
-  control.addEventListener("change", () => {
-    updateLayerDebugFlags();
-    renderLights();
-  });
-});
-
 elements.saveAnnotationButton.addEventListener("click", () => {
   saveTrainingAnnotation();
 });
@@ -3310,7 +3277,6 @@ function stopDrag(event) {
 }
 
 buildLights(Number(elements.lightCount.value), false);
-updateLayerDebugFlags();
 updateOutputMode();
 setInputMode(elements.inputSource.value);
 drawTrackOverview();

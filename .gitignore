@@ -24,3 +24,6 @@ output/
 # Logs and temporary files
 *.log
 *.tmp
+
+# Local analysis outputs
+analysis/*.json

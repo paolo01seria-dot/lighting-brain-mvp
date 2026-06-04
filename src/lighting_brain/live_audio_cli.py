@@ -177,13 +177,20 @@ def selected_samplerate(sounddevice, device_index, requested_samplerate):
 
 
 def review_audio_samplerate(samplerate):
-  return min(int(samplerate), 12000)
+  source_rate = int(samplerate)
+  if source_rate in (44100, 48000):
+    return source_rate
+  if source_rate >= 24000:
+    return source_rate // 2
+  return source_rate if source_rate > 0 else 12000
 
 
 def review_audio_samples(samples, samplerate):
   target_rate = review_audio_samplerate(samplerate)
+  if target_rate == int(samplerate):
+    return [round(max(-1.0, min(1.0, float(sample))), 4) for sample in samples]
   step = max(1, round(int(samplerate) / target_rate))
-  return [round(float(sample), 4) for sample in samples[::step]]
+  return [round(max(-1.0, min(1.0, float(sample))), 4) for sample in samples[::step]]
 
 
 if __name__ == "__main__":

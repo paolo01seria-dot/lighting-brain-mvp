@@ -80,11 +80,17 @@ const elements = {
   currentSampleCategory: document.querySelector("#currentSampleCategory"),
   currentSceneCategory: document.querySelector("#currentSceneCategory"),
   currentIntent: document.querySelector("#currentIntent"),
+  currentLightingIntent: document.querySelector("#currentLightingIntent"),
+  currentTimingIntent: document.querySelector("#currentTimingIntent"),
+  currentPhaseSummary: document.querySelector("#currentPhaseSummary"),
   currentGesture: document.querySelector("#currentGesture"),
   currentEnergyTrend: document.querySelector("#currentEnergyTrend"),
   cueNameInput: document.querySelector("#cueNameInput"),
   cueProbabilityInput: document.querySelector("#cueProbabilityInput"),
   saveAnnotationButton: document.querySelector("#saveAnnotationButton"),
+  blackoutSceneButton: document.querySelector("#blackoutSceneButton"),
+  copySceneButton: document.querySelector("#copySceneButton"),
+  pasteSceneButton: document.querySelector("#pasteSceneButton"),
   downloadAnnotationsButton: document.querySelector("#downloadAnnotationsButton"),
   clearTrainingLightsButton: document.querySelector("#clearTrainingLightsButton"),
   trainingSummary: document.querySelector("#trainingSummary"),
@@ -127,6 +133,15 @@ let reviewPlaybackStartTime = 0;
 let isPlaying = false;
 let inputMode = "system_audio";
 let lastTrainingAudioDebugAt = -1;
+let lastPhaseRenderLogSecond = -1;
+let lastReviewSyncLogSecond = -1;
+let lastReviewRenderLogAt = 0;
+let reviewRenderFrameCount = 0;
+let lastReviewPerfLogAt = 0;
+let reviewPerfFrameCount = 0;
+let reviewPerfDomWrites = 0;
+let lastManualOverrideAppliedKey = null;
+let lastManualOverrideMissingKey = null;
 let overviewCacheCanvas;
 let previousSpectrum;
 let sceneVariant = 0;
@@ -156,6 +171,8 @@ let positions = [];
 let dragging = null;
 let trainingAnnotations = [];
 let selectedTrainingCueId = null;
+let copiedTrainingScene = null;
+let lastLightOffReasonById = {};
 let trainingCapture = {
   active: false,
   frames: [],
@@ -167,6 +184,7 @@ let trainingCapture = {
   source: null,
   audioSamples: [],
   audioSampleRate: null,
+  manualOverridesByKey: {},
 };
 
 function buildLights(count, keepPositions = true) {
@@ -220,6 +238,11 @@ function buildLights(count, keepPositions = true) {
       manualRandomColor: null,
       phaseFirstHalf: true,
       phaseSecondHalf: true,
+      phaseMode: "full_beat",
+      timingIntent: "sustain",
+      enabled: true,
+      colorMode: "auto",
+      blackout: false,
     });
   });
 
@@ -870,6 +893,10 @@ function shouldHoldSparseChase(time, profile, energy) {
 function triggerPattern(context) {
   const count = lights.length;
   if (!count) return;
+  const trend = energyTrend(context.energy - previousEnergy);
+  const sceneTimingIntent = timingIntentForSample(context.category, null, context.energy, trend);
+  const sceneLightingIntent = lightingIntentForSample(context.category, null, context.energy, trend);
+  const beatStep = Math.floor(context.time / Math.max(musicalClock.interval ?? 0.5, 0.24));
 
   const activeIndexes = context.gesture
     ? pickGestureLights(context, count)
@@ -879,12 +906,43 @@ function triggerPattern(context) {
     const clockBoost = context.clockSource && context.clockSource !== "none" ? 0.08 : 0;
     const base = context.strong ? 0.96 : context.sparse ? 0.48 : 0.62 + clockBoost;
     const spectral = context.low * 0.2 + context.mid * 0.14 + context.high * 0.18;
+    const phase = phaseConfigForTimingIntent(sceneTimingIntent, order, beatStep);
     lightStates[index].intensity = clamp(base + spectral - order * 0.06, 0.28, 1);
     lightStates[index].age = 0;
     lightStates[index].colorIndex = colorIndex;
+    lightStates[index].lightingIntent = sceneLightingIntent;
+    lightStates[index].timingIntent = sceneTimingIntent;
+    lightStates[index].enabled = true;
+    lightStates[index].colorMode = "auto";
+    lightStates[index].blackout = false;
+    lightStates[index].phaseFirstHalf = phase.first;
+    lightStates[index].phaseSecondHalf = phase.second;
+    lightStates[index].phaseMode = phase.mode;
   });
 
   blackoutNonActive(activeIndexes, context.strong ? 0.08 : 0.025);
+  updateBrainSemantics(sceneLightingIntent, sceneTimingIntent);
+}
+
+function phaseConfigForTimingIntent(timingIntent, order, beatStep) {
+  if (timingIntent === "pulse_first_half") {
+    return { first: true, second: false, mode: "first_half" };
+  }
+  if (timingIntent === "pulse_second_half") {
+    return { first: false, second: true, mode: "second_half" };
+  }
+  if (timingIntent === "alternate_halves" || timingIntent === "strobe_like") {
+    const firstHalf = (order + beatStep) % 2 === 0;
+    return {
+      first: firstHalf,
+      second: !firstHalf,
+      mode: firstHalf ? "first_half" : "second_half",
+    };
+  }
+  if (timingIntent === "blackout") {
+    return { first: false, second: false, mode: "off" };
+  }
+  return { first: true, second: true, mode: "full_beat" };
 }
 
 function pickGestureLights(context, count) {
@@ -1054,6 +1112,7 @@ function blackoutLights() {
   lightStates.forEach((state) => {
     state.intensity = 0;
     state.age = 999;
+    state.timingIntent = "blackout";
     if (!isTrainingMode()) {
       state.manualColorIndex = null;
       state.manualRandomColor = null;
@@ -1067,6 +1126,7 @@ function blackoutAutoLights() {
     if (state.manualColorIndex === null || state.manualColorIndex === undefined) {
       state.intensity = 0;
       state.age = 999;
+      state.timingIntent = "blackout";
     }
   });
   renderLights();
@@ -1110,47 +1170,221 @@ function manualLightColor(state) {
   return color;
 }
 
+function lightOffReason(state) {
+  if (state.enabled === false) return "manual_scene";
+  if (state.blackout) return "blackout";
+  if (state.colorMode === "off") return "blackout";
+  if (state.phaseMode === "off") return "phase_off";
+  if (state.timingIntent === "blackout") return "blackout";
+  if (state.phaseFirstHalf === false && state.phaseSecondHalf === false) return "phase_off";
+  if (Number(state.intensity ?? 0) <= 0) return "intensity_zero";
+  return null;
+}
+
+function isLightOffState(state) {
+  return Boolean(lightOffReason(state));
+}
+
+function phaseStateForLight(state) {
+  const phaseMode = phaseModeForState(state);
+  const off = isLightOffState(state) || phaseMode === "off";
+  return {
+    phaseMode,
+    firstOn: !off && (phaseMode === "first_half" || phaseMode === "full_beat"),
+    secondOn: !off && (phaseMode === "second_half" || phaseMode === "full_beat"),
+    fullBeat: !off && phaseMode === "full_beat",
+    off,
+  };
+}
+
+function phaseButtonVisualState(state, phaseState, baseColor, manualCasual, lightOff) {
+  const off = lightOff || phaseState.off || isLightOffState(state);
+  const offButton = { selected: false, off: true, casual: false, color: "rgb(0, 0, 0)" };
+  if (off) {
+    return { first: offButton, second: offButton };
+  }
+  return {
+    first: {
+      selected: phaseState.firstOn,
+      off: !phaseState.firstOn,
+      casual: phaseState.firstOn && manualCasual,
+      color: phaseState.firstOn && !manualCasual ? baseColor : "rgb(0, 0, 0)",
+    },
+    second: {
+      selected: phaseState.secondOn,
+      off: !phaseState.secondOn,
+      casual: phaseState.secondOn && manualCasual,
+      color: phaseState.secondOn && !manualCasual ? baseColor : "rgb(0, 0, 0)",
+    },
+  };
+}
+
+function applyPhaseButtonVisual(button, visualState) {
+  if (!button) return;
+  button.classList.toggle("is-selected", visualState.selected);
+  button.classList.toggle("is-off", visualState.off);
+  button.classList.toggle("is-casual", visualState.casual);
+}
+
+function forceLightVisualOff(light) {
+  light.classList.remove("active", "phase-split", "flat-visible", "casual");
+  light.classList.add("blackout");
+  light.style.background = "";
+  light.style.opacity = "0.82";
+  light.style.boxShadow = "";
+  light.style.setProperty("--beam", "transparent");
+  light.style.setProperty("--beam-opacity", "0");
+  light.style.removeProperty("--lens-fill");
+  light.style.removeProperty("--phase-lens-fill");
+  light.style.removeProperty("--flat-phase-fill");
+  light.style.removeProperty("--flat-bulb-fill");
+  light.style.removeProperty("--phase-left");
+  light.style.removeProperty("--phase-right");
+  light.style.removeProperty("--phase-button-color");
+}
+
+function clearPhaseVisualResidues() {
+  lights.forEach((light) => {
+    light.classList.remove("phase-split");
+    light.style.removeProperty("--phase-left");
+    light.style.removeProperty("--phase-right");
+    light.style.removeProperty("--phase-button-color");
+    light.style.removeProperty("--phase-lens-fill");
+    light.style.removeProperty("--flat-phase-fill");
+    light.querySelectorAll(".phase-button").forEach((button) => {
+      button.classList.remove("is-selected", "is-casual");
+      button.classList.add("is-off");
+    });
+  });
+}
+
+function resetModeVisualState(reason) {
+  if (reviewAnimationFrame) {
+    cancelAnimationFrame(reviewAnimationFrame);
+    reviewAnimationFrame = null;
+  }
+  stopReviewAudioSource();
+  selectedTrainingCueId = null;
+  document.body.classList.remove("is-training-edit", "is-review-playing");
+  clearPhaseVisualResidues();
+  updateCueEditor();
+  updateReviewPlayButton();
+  logEvent(`[mode-reset] reason=${reason}`);
+}
+
+function resetLiveLightState(reason) {
+  lightStates.forEach((state, index) => {
+    state.enabled = true;
+    state.intensity = 0;
+    state.age = 999;
+    state.colorIndex = index % colors.length;
+    state.manualColorIndex = null;
+    state.manualRandomColor = null;
+    state.colorMode = "auto";
+    state.blackout = false;
+    state.phaseFirstHalf = true;
+    state.phaseSecondHalf = true;
+    state.phaseMode = "full_beat";
+    state.lightingIntent = "sustain";
+    state.timingIntent = "sustain";
+  });
+  lastLightOffReasonById = {};
+  if (trainingCapture.manualOverridesByKey && Object.keys(trainingCapture.manualOverridesByKey).length) {
+    trainingCapture.manualOverridesByKey = {};
+    logEvent(`[manual-override] cleared reason=${reason}`);
+  } else {
+    logEvent(`[manual-override] ignored reason=live_mode`);
+  }
+  renderLights();
+}
+
+function phaseModeSummary() {
+  const counts = { first: 0, second: 0, full: 0, off: 0 };
+  lightStates.forEach((state) => {
+    const phaseState = phaseStateForLight(state);
+    if (phaseState.off) counts.off += 1;
+    else if (phaseState.phaseMode === "first_half") counts.first += 1;
+    else if (phaseState.phaseMode === "second_half") counts.second += 1;
+    else counts.full += 1;
+  });
+  return `first:${counts.first} second:${counts.second} full:${counts.full} off:${counts.off}`;
+}
+
+function updateBrainSemantics(lightingIntent, timingIntent) {
+  if (lightingIntent !== undefined && elements.currentLightingIntent) elements.currentLightingIntent.textContent = lightingIntent ?? "-";
+  if (timingIntent !== undefined && elements.currentTimingIntent) elements.currentTimingIntent.textContent = timingIntent ?? "-";
+  if (elements.currentPhaseSummary) elements.currentPhaseSummary.textContent = phaseModeSummary();
+}
+
+function logLightOff(index, reason) {
+  if (lastLightOffReasonById[index] === reason) return;
+  lastLightOffReasonById[index] = reason;
+  logEvent(`[light-off] id=${index} reason=${reason}`);
+}
+
 function renderLights() {
+  const playingReview = Boolean(reviewAnimationFrame);
+  const liveListening = isPlaying && (inputMode === "mic_device" || inputMode === "system_audio");
+  const phaseAnimatedMode = playingReview || liveListening;
+  const editStaticMode = trainingReviewModeActive() && !phaseAnimatedMode;
+  const reviewTime = phaseAnimatedMode ? currentPlaybackTime() : trainingCapture.reviewTime ?? currentPlaybackTime();
+  const beatPhase = phaseAnimatedMode ? currentBeatPhaseAt(reviewTime).phase : null;
   lights.forEach((light, index) => {
     const state = lightStates[index] ?? { intensity: 0, colorIndex: index % colors.length };
     const manual = state.manualColorIndex !== null && state.manualColorIndex !== undefined;
     const manualColor = manualLightColor(state);
     const color = manualColor ?? colors[state.colorIndex];
-    const manualCasual = Boolean(manual && manualColor?.name === "casual");
+    let manualCasual = Boolean(manual && manualColor?.name === "casual");
     const [r, g, b] = color.value;
-    const phaseFirst = state.phaseFirstHalf !== false;
-    const phaseSecond = state.phaseSecondHalf !== false;
-    const activePhaseCount = (phaseFirst ? 1 : 0) + (phaseSecond ? 1 : 0);
-    const manualBlackout = Boolean(manual && (manualColor?.blackout || activePhaseCount === 0));
-    const intensity = manual ? (manualBlackout ? 0 : 1) : clamp(state.intensity, 0, 1);
-    const visible = intensity > 0.04;
-    const phaseSplit = manual && (!phaseFirst || !phaseSecond);
+    const phaseState = phaseStateForLight(state);
+    if (phaseState.off) manualCasual = false;
+    const manualBlackout = Boolean(manual && (manualColor?.blackout || phaseState.off));
+    const offReason = phaseState.off || manualBlackout ? lightOffReason(state) ?? "blackout" : null;
+    const lightOff = Boolean(offReason);
+    if (lightOff) manualCasual = false;
+    if (lightOff) logLightOff(index, offReason);
+    else delete lastLightOffReasonById[index];
+    const intensity = lightOff ? 0 : manual ? 1 : clamp(state.intensity, 0, 1);
+    const timingIntent = state.timingIntent ?? timingIntentForLightState(state);
+    const effectiveIntensity = lightOff ? 0 : applyPhaseEnvelope(intensity, state, beatPhase, timingIntent, phaseAnimatedMode);
+    const visible = effectiveIntensity > 0.04;
     const flatColor = `rgb(${r}, ${g}, ${b})`;
+    const phaseButtonState = phaseButtonVisualState(state, phaseState, flatColor, manualCasual, lightOff);
+    if (phaseState.off || lightOff || timingIntent === "blackout" || effectiveIntensity <= 0) {
+      if (editStaticMode) {
+        const leftPhaseButton = light.querySelector('[data-phase="first"]');
+        const rightPhaseButton = light.querySelector('[data-phase="second"]');
+        applyPhaseButtonVisual(leftPhaseButton, phaseButtonState.first);
+        applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
+      }
+      forceLightVisualOff(light);
+      if (playingReview) reviewPerfDomWrites += 1;
+      return;
+    }
+    const phaseSplit = editStaticMode && !phaseState.off && !(phaseState.firstOn && phaseState.secondOn);
     const lensFill = manualCasual
       ? "url('assets/casual-color.jpg') center / cover"
       : flatColor;
-    const phaseColor = manualCasual
-      ? "transparent"
-      : `rgba(${r}, ${g}, ${b}, ${0.48 + intensity * 0.42})`;
     const phaseOff = "rgb(0, 0, 0)";
-    const partialPhase = manual && activePhaseCount === 1;
-    const showGlow = visible && !manualBlackout;
-    const phaseOffMask = `linear-gradient(90deg, ${phaseFirst ? "transparent" : phaseOff} 0 50%, ${phaseFirst ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 50%, ${phaseSecond ? "transparent" : phaseOff} 100%)`;
+    const showGlow = visible && !lightOff;
+    const phaseOffMask = phaseSplit
+      ? `linear-gradient(90deg, ${phaseState.firstOn ? "transparent" : phaseOff} 0 50%, ${phaseState.firstOn ? "transparent" : phaseOff} 50%, ${phaseState.secondOn ? "transparent" : phaseOff} 50%, ${phaseState.secondOn ? "transparent" : phaseOff} 100%)`
+      : "";
     const phaseLensFill = phaseSplit
       ? manualCasual
         ? `${phaseOffMask}, url('assets/casual-color.jpg') center / cover`
-        : `linear-gradient(90deg, ${phaseFirst ? flatColor : phaseOff} 0 50%, ${phaseFirst ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 100%)`
+        : `linear-gradient(90deg, ${phaseState.firstOn ? flatColor : phaseOff} 0 50%, ${phaseState.firstOn ? flatColor : phaseOff} 50%, ${phaseState.secondOn ? flatColor : phaseOff} 50%, ${phaseState.secondOn ? flatColor : phaseOff} 100%)`
       : "";
-    const flatBulbFill = visible && !manualBlackout
+    const flatBulbFill = visible && !lightOff
       ? lensFill
       : "";
     const flatPhaseFill = phaseSplit
       ? manualCasual
         ? `${phaseOffMask}, url('assets/casual-color.jpg') center / cover`
-        : `linear-gradient(90deg, ${phaseFirst ? flatColor : phaseOff} 0 50%, ${phaseFirst ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 50%, ${phaseSecond ? flatColor : phaseOff} 100%)`
+        : `linear-gradient(90deg, ${phaseState.firstOn ? flatColor : phaseOff} 0 50%, ${phaseState.firstOn ? flatColor : phaseOff} 50%, ${phaseState.secondOn ? flatColor : phaseOff} 50%, ${phaseState.secondOn ? flatColor : phaseOff} 100%)`
       : flatBulbFill;
-    const leftPhaseButton = light.querySelector('[data-phase="first"]');
-    const rightPhaseButton = light.querySelector('[data-phase="second"]');
+    const leftPhaseButton = editStaticMode ? light.querySelector('[data-phase="first"]') : null;
+    const rightPhaseButton = editStaticMode ? light.querySelector('[data-phase="second"]') : null;
 
     light.style.background = visible
       ? manualCasual
@@ -1161,19 +1395,32 @@ function renderLights() {
       : "";
     light.style.opacity = visible ? "1" : "0.82";
     light.style.boxShadow = showGlow
-      ? `0 0 ${Math.round(10 + intensity * 54)}px rgba(${r}, ${g}, ${b}, ${intensity * 0.84})`
+      ? `0 0 ${Math.round(10 + effectiveIntensity * 54)}px rgba(${r}, ${g}, ${b}, ${effectiveIntensity * 0.84})`
       : "";
-    light.style.setProperty("--beam", showGlow ? `rgba(${r}, ${g}, ${b}, ${intensity})` : "transparent");
-    light.style.setProperty("--beam-opacity", showGlow ? String(intensity * 0.42) : "0");
-    light.style.setProperty("--lens-fill", visible && !manualBlackout ? (phaseSplit ? phaseLensFill : lensFill) : "");
+    light.style.setProperty("--beam", showGlow ? `rgba(${r}, ${g}, ${b}, ${effectiveIntensity})` : "transparent");
+    light.style.setProperty("--beam-opacity", showGlow ? String(effectiveIntensity * 0.42) : "0");
+    light.style.setProperty("--lens-fill", visible && !lightOff ? (phaseSplit ? phaseLensFill : lensFill) : "");
     if (phaseLensFill) {
       light.style.setProperty("--phase-lens-fill", phaseLensFill);
     } else {
       light.style.removeProperty("--phase-lens-fill");
     }
-    light.style.setProperty("--phase-left", phaseFirst ? phaseColor : phaseOff);
-    light.style.setProperty("--phase-right", phaseSecond ? phaseColor : phaseOff);
-    light.style.setProperty("--phase-button-color", `rgba(${r}, ${g}, ${b}, 0.88)`);
+    if (editStaticMode) {
+      const phaseColor = manualCasual ? "transparent" : flatColor;
+      light.style.setProperty("--phase-left", phaseButtonState.first.selected ? phaseColor : phaseOff);
+      light.style.setProperty("--phase-right", phaseButtonState.second.selected ? phaseColor : phaseOff);
+      if (phaseButtonState.first.selected || phaseButtonState.second.selected) {
+        light.style.setProperty("--phase-button-color", flatColor);
+      } else {
+        light.style.removeProperty("--phase-button-color");
+      }
+    } else {
+      light.style.removeProperty("--phase-left");
+      light.style.removeProperty("--phase-right");
+      light.style.removeProperty("--phase-button-color");
+      light.style.removeProperty("--phase-lens-fill");
+      light.style.removeProperty("--flat-phase-fill");
+    }
     if (flatBulbFill) {
       light.style.setProperty("--flat-bulb-fill", flatBulbFill);
       light.style.setProperty("--flat-phase-fill", flatPhaseFill);
@@ -1181,19 +1428,19 @@ function renderLights() {
       light.style.removeProperty("--flat-bulb-fill");
       light.style.removeProperty("--flat-phase-fill");
     }
-    light.classList.toggle("active", intensity > 0.62);
+    light.classList.toggle("active", effectiveIntensity > 0.62);
     light.classList.toggle("manual", manual);
-    light.classList.toggle("casual", manualCasual && !manualBlackout);
+    light.classList.toggle("casual", manualCasual && !lightOff);
     light.classList.toggle("phase-split", phaseSplit);
-    light.classList.toggle("blackout", manualBlackout);
+    light.classList.toggle("blackout", lightOff);
     light.classList.toggle("flat-visible", Boolean(flatBulbFill));
-    leftPhaseButton?.classList.toggle("is-off", !phaseFirst || manualBlackout);
-    rightPhaseButton?.classList.toggle("is-off", !phaseSecond || manualBlackout);
-    leftPhaseButton?.classList.toggle("is-casual", manualCasual && !manualBlackout);
-    rightPhaseButton?.classList.toggle("is-casual", manualCasual && !manualBlackout);
-    leftPhaseButton?.classList.toggle("is-selected", partialPhase && phaseFirst && !manualBlackout);
-    rightPhaseButton?.classList.toggle("is-selected", partialPhase && phaseSecond && !manualBlackout);
+    if (editStaticMode) {
+      applyPhaseButtonVisual(leftPhaseButton, phaseButtonState.first);
+      applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
+    }
+    if (playingReview) reviewPerfDomWrites += 1;
   });
+  updateBrainSemantics(undefined, undefined);
 }
 
 function updateMeter(energy) {
@@ -1510,7 +1757,7 @@ function currentPlaybackTime() {
     }
     return clamp(trainingCapture.reviewTime, 0, trainingCapture.duration);
   }
-  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length) {
+  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingReviewModeActive()) {
     return clamp(trainingCapture.reviewTime, 0, trainingCapture.duration);
   }
   if (inputMode === "mic_device" || inputMode === "system_audio") {
@@ -1560,6 +1807,7 @@ function updateTrainingReadout(time) {
   elements.currentSampleCategory.textContent = sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? "-";
   elements.currentSceneCategory.textContent = metadata.lighting?.scene_category ?? sceneEvent?.scene ?? "-";
   elements.currentIntent.textContent = metadata.designer_logic?.lighting_intent ?? sceneEvent?.intent ?? "-";
+  updateBrainSemantics(metadata.designer_logic?.lighting_intent ?? sceneEvent?.intent, metadata.lighting?.timing_intent ?? rhythmEvent?.timing_intent);
   elements.currentGesture.textContent = rhythmEvent?.gesture ?? "-";
   elements.currentEnergyTrend.textContent = metadata.audio?.energy_trend ?? "-";
 }
@@ -1773,14 +2021,16 @@ function trainingReviewAvailable() {
 }
 
 function trainingReviewUsesOriginalFileAudio() {
-  return trainingReviewAvailable()
+  return isTrainingMode()
+    && trainingReviewAvailable()
     && trainingCapture.source === "file"
     && hasLoadedAudio()
     && Boolean(audioElement?.src);
 }
 
 function trainingReviewModeActive() {
-  return trainingReviewAvailable()
+  return isTrainingMode()
+    && trainingReviewAvailable()
     && (trainingReviewUsesOriginalFileAudio() || inputMode === "file" || inputMode === "mic_device" || inputMode === "system_audio");
 }
 
@@ -1821,16 +2071,128 @@ function snapTrainingReviewTime(rawTime) {
   ), times[0]);
 }
 
-function captureLightSnapshot() {
-  return lightStates.map((state) => ({
-    intensity: roundNumber(state.intensity ?? 0, 4),
-    age: state.age ?? 0,
-    colorIndex: state.colorIndex ?? 0,
-    manualColorIndex: state.manualColorIndex ?? null,
-    manualRandomColor: state.manualRandomColor ?? null,
-    phaseFirstHalf: state.phaseFirstHalf !== false,
-    phaseSecondHalf: state.phaseSecondHalf !== false,
-  }));
+function phaseFromPulse(time, pulseTime, interval, source) {
+  if (!Number.isFinite(time) || !Number.isFinite(pulseTime) || !Number.isFinite(interval) || interval <= 0) {
+    return { phase: null, source: "none" };
+  }
+  const elapsed = ((time - pulseTime) % interval + interval) % interval;
+  return { phase: clamp(elapsed / interval, 0, 0.9999), source };
+}
+
+function currentBeatPhaseAt(time) {
+  let result = { phase: null, source: "none" };
+  if ((inputMode === "timeline" || trainingCapture.source === "timeline") && timelineRhythmEvents.length) {
+    const index = timelineRhythmEvents.findIndex((event) => event.time > time);
+    const previous = timelineRhythmEvents[index > 0 ? index - 1 : 0];
+    const next = index >= 0 ? timelineRhythmEvents[index] : null;
+    const interval = next && previous ? next.time - previous.time : musicalClock.interval;
+    result = phaseFromPulse(time, previous?.time, interval, "timelineRhythmEvents");
+  }
+  if (result.phase === null && musicalClock.interval && musicalClock.confidence >= 0.18 && musicalClock.lastPulseTime !== null) {
+    result = phaseFromPulse(time, musicalClock.lastPulseTime, musicalClock.interval, musicalClock.source || "musicalClock");
+  }
+  if (result.phase === null && trainingReviewModeActive()) {
+    const frame = findTrainingFrameAt(time) ?? trainingCapture.frames[0];
+    const interval = Number(frame?.rhythm_split?.base_interval_seconds);
+    const pulseTime = Number(frame?.time);
+    if (Number.isFinite(interval) && interval > 0 && Number.isFinite(pulseTime)) {
+      result = phaseFromPulse(time, pulseTime, interval, "trainingFrames");
+    }
+  }
+  const second = Math.floor(time);
+  if (second !== lastPhaseRenderLogSecond) {
+    lastPhaseRenderLogSecond = second;
+    logEvent(`[phase-render] time=${roundNumber(time, 2)} beatPhase=${result.phase === null ? "null" : roundNumber(result.phase, 3)} source=${result.source}`);
+  }
+  return result;
+}
+
+function phaseModeForState(state) {
+  if (state.phaseMode) return state.phaseMode;
+  const first = state.phaseFirstHalf !== false;
+  const second = state.phaseSecondHalf !== false;
+  if (first && second) return "full_beat";
+  if (first) return "first_half";
+  if (second) return "second_half";
+  return "off";
+}
+
+function applyPhaseEnvelope(intensity, state, beatPhase, timingIntent, isPlayingReview) {
+  const phaseState = phaseStateForLight(state);
+  if (phaseState.off || timingIntent === "blackout") return 0;
+  if (!isPlayingReview) return intensity;
+  if (beatPhase === null || beatPhase === undefined) return intensity;
+  const impulsive = timingIntent === "pulse_first_half"
+    || timingIntent === "pulse_second_half"
+    || timingIntent === "pulse_full_beat"
+    || timingIntent === "alternate_halves"
+    || timingIntent === "strobe_like";
+  if (!impulsive) return intensity;
+  if (phaseState.phaseMode === "full_beat") return intensity;
+  if (phaseState.phaseMode === "first_half") return beatPhase < 0.5 ? intensity : 0;
+  if (phaseState.phaseMode === "second_half") return beatPhase >= 0.5 ? intensity : 0;
+  return intensity;
+}
+
+function timingIntentForLightState(state, sceneTimingIntent = "sustain") {
+  const phaseMode = phaseModeForState(state);
+  if (phaseMode === "off") return "blackout";
+  if (phaseMode === "first_half") return "pulse_first_half";
+  if (phaseMode === "second_half") return "pulse_second_half";
+  if (sceneTimingIntent === "blackout") return "blackout";
+  if (sceneTimingIntent === "strobe_like") return "strobe_like";
+  if (sceneTimingIntent === "alternate_halves") return "alternate_halves";
+  if (sceneTimingIntent === "fade_sustain") return "sustain";
+  return sceneTimingIntent === "pulse_full_beat" ? "pulse_full_beat" : "sustain";
+}
+
+function timingIntentForSample(category, sceneCategory, energy, trend = "stable") {
+  const normalizedScene = String(sceneCategory ?? "").toLowerCase();
+  if (category === "silence_or_pause" || category === "stop_music_moment") return "blackout";
+  if (category === "ambient_no_beat") return energy > 0.18 ? "fade_sustain" : "sustain";
+  if (category === "breakdown") return "fade_sustain";
+  if (category === "buildup") return trend === "rising" ? "alternate_halves" : "pulse_full_beat";
+  if (category === "high_energy_drop") {
+    if (energy > 0.7 || normalizedScene.includes("drop")) return "strobe_like";
+    return "alternate_halves";
+  }
+  if (category === "steady_bass_pulse") {
+    return energy > 0.48 ? "alternate_halves" : "pulse_full_beat";
+  }
+  if (normalizedScene.includes("blackout")) return "blackout";
+  if (normalizedScene.includes("strobe")) return "strobe_like";
+  return energy > 0.22 ? "pulse_full_beat" : "sustain";
+}
+
+function lightingIntentForSample(category, sceneCategory, energy, trend = "stable") {
+  const timingIntent = timingIntentForSample(category, sceneCategory, energy, trend);
+  if (timingIntent === "blackout") return "blackout";
+  if (timingIntent === "strobe_like") return "strobe_like";
+  if (timingIntent === "alternate_halves") return "alternating_pulse";
+  if (timingIntent === "pulse_full_beat" || timingIntent === "pulse_first_half" || timingIntent === "pulse_second_half") return "pulse";
+  if (category === "ambient_no_beat" || category === "breakdown" || timingIntent === "fade_sustain") return "sustain";
+  return trend === "rising" ? "build_tension" : "sustain";
+}
+
+function captureLightSnapshot(sceneTimingIntent = "sustain") {
+  return lightStates.map((state) => {
+    const phaseState = phaseStateForLight(state);
+    return {
+      enabled: state.enabled !== false && !phaseState.off,
+      intensity: roundNumber(state.intensity ?? 0, 4),
+      age: state.age ?? 0,
+      colorIndex: state.colorIndex ?? 0,
+      manualColorIndex: state.manualColorIndex ?? null,
+      manualRandomColor: state.manualRandomColor ?? null,
+      colorMode: phaseState.off ? "off" : state.colorMode ?? (state.manualColorIndex === null || state.manualColorIndex === undefined ? "auto" : "manual"),
+      blackout: Boolean(state.blackout || phaseState.off),
+      phaseFirstHalf: phaseState.firstOn,
+      phaseSecondHalf: phaseState.secondOn,
+      phaseMode: phaseState.phaseMode,
+      lightingIntent: state.lightingIntent ?? (phaseState.off ? "blackout" : "sustain"),
+      timingIntent: timingIntentForLightState(state, state.timingIntent ?? sceneTimingIntent),
+    };
+  });
 }
 
 function applyLightSnapshot(snapshot) {
@@ -1844,8 +2206,14 @@ function applyLightSnapshot(snapshot) {
       colorIndex: clamp(Math.round(Number(state.colorIndex ?? 0)), 0, colors.length - 1),
       manualColorIndex: state.manualColorIndex,
       manualRandomColor: state.manualRandomColor,
+      enabled: state.enabled !== false,
+      colorMode: state.colorMode ?? "auto",
+      blackout: Boolean(state.blackout),
       phaseFirstHalf: state.phaseFirstHalf !== false,
       phaseSecondHalf: state.phaseSecondHalf !== false,
+      phaseMode: state.phaseMode ?? phaseModeForState(state),
+      lightingIntent: state.lightingIntent,
+      timingIntent: state.timingIntent ?? timingIntentForLightState(state),
     };
   });
   renderLights();
@@ -1857,6 +2225,7 @@ function persistCurrentTrainingFrameScene() {
   const time = currentPlaybackTime();
   const frame = findTrainingFrameAt(time);
   if (!frame) return null;
+  const lightSnapshot = captureLightSnapshot(frame.timing_intent ?? "sustain");
   const scene = {
     source: "user_scene",
     edited_at: new Date().toISOString(),
@@ -1864,16 +2233,20 @@ function persistCurrentTrainingFrameScene() {
     review_time: roundNumber(time, 4),
     sample_category: frame.sample_category ?? null,
     scene_category: `${frame.scene_category ?? "training_scene"}__user`,
+    lighting_intent: frame.lighting_intent ?? lightingIntentForSample(frame.sample_category, frame.scene_category, frame.energy ?? 0, frame.energy_trend),
+    timing_intent: frame.timing_intent ?? timingIntentForSample(frame.sample_category, frame.scene_category, frame.energy ?? 0, frame.energy_trend),
     intent: frame.intent ?? null,
     dominant_component: frame.dominant_component ?? frame.clock_source ?? null,
     energy_trend: frame.energy_trend ?? null,
-    light_snapshot: captureLightSnapshot(),
+    light_snapshot: lightSnapshot,
   };
   frame.user_scene = scene;
   frame.final_scene = scene;
+  saveManualOverrideForTime(time, lightSnapshot);
   elements.currentSampleCategory.textContent = scene.sample_category ?? "-";
   elements.currentSceneCategory.textContent = scene.scene_category ?? "-";
   elements.currentIntent.textContent = scene.intent ?? "-";
+  updateBrainSemantics(scene.lighting_intent, scene.timing_intent);
   elements.currentGesture.textContent = scene.dominant_component ?? "-";
   elements.currentEnergyTrend.textContent = scene.energy_trend ?? "-";
   return frame;
@@ -1920,7 +2293,7 @@ function drawComponentLanes(componentLanes, time, options = {}) {
     vocal: [255, 132, 60],
     other: [245, 247, 248],
   };
-  const reviewMode = !trainingCapture.active && trainingCapture.frames.length > 0;
+  const reviewMode = trainingReviewModeActive();
   const history = reviewMode
     ? trainingCapture.frames.map((frame) => ({
       time: frame.time,
@@ -1982,7 +2355,7 @@ function updateSpectrumCanvasWidth() {
   const canvas = elements.liveSpectrum;
   const scroller = elements.spectrumScroller;
   if (!canvas || !scroller) return;
-  const reviewMode = !trainingCapture.active && trainingCapture.frames.length > 0;
+  const reviewMode = trainingReviewModeActive();
   if (!reviewMode) {
     canvas.style.width = "100%";
     return;
@@ -2008,7 +2381,7 @@ function followSpectrumPlayhead(currentTime, duration) {
 }
 
 function drawTrainingCueMarkers(context, width, height, ratio, duration, currentTime) {
-  if (!trainingReviewAvailable()) return;
+  if (!trainingReviewModeActive()) return;
   trainingReviewCueTimes().forEach((time) => {
     const x = clamp(time / Math.max(duration, 0.001), 0, 1) * width;
     context.strokeStyle = "rgba(255, 255, 255, 0.16)";
@@ -2222,7 +2595,7 @@ async function seekToSliderValue(value) {
     }
     return;
   }
-  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length) {
+  if ((inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingReviewModeActive()) {
     pauseTrainingReviewPlayback();
     const rawTime = (Number(value) / 1000) * trainingCapture.duration;
     const time = snapTrainingReviewTime(rawTime);
@@ -2276,9 +2649,14 @@ function canEditTrainingScene() {
 }
 
 function updateTrainingEditState() {
-  const editable = canEditTrainingScene();
+  const playingReview = Boolean(reviewAnimationFrame);
+  const editable = canEditTrainingScene() && !playingReview;
   document.body.classList.toggle("is-training-edit", editable);
+  document.body.classList.toggle("is-review-playing", playingReview);
   elements.saveAnnotationButton.disabled = !editable;
+  elements.blackoutSceneButton.disabled = !editable;
+  elements.copySceneButton.disabled = !editable;
+  elements.pasteSceneButton.disabled = !editable || !copiedTrainingScene;
   elements.clearTrainingLightsButton.disabled = !editable;
   updateCueEditor();
   updateReviewPlayButton();
@@ -2291,6 +2669,7 @@ function selectedTrainingDuration() {
 function beginTrainingCapture(source) {
   if (!isTrainingMode()) return;
   pauseTrainingReviewPlayback();
+  resetModeVisualState("training_on");
   lastTrainingAudioDebugAt = -1;
   if (elements.spectrumScroller) {
     elements.spectrumScroller.scrollLeft = 0;
@@ -2307,6 +2686,7 @@ function beginTrainingCapture(source) {
     source,
     audioSamples: [],
     audioSampleRate: null,
+    manualOverridesByKey: {},
   };
   selectedTrainingCueId = null;
   elements.seekSlider.disabled = true;
@@ -2362,28 +2742,35 @@ function captureTrainingFrame(reading) {
   const category = reading.sample_category ?? categoryForEnergy(reading.energy ?? 0);
   const sceneChanged = updateCategoryScene(category);
   const componentLanes = normalizeComponentLanes(reading.component_lanes);
+  const sceneCategory = sceneCategoryForSample(category, sceneChanged);
+  const trend = energyTrend(reading.energy_delta ?? ((reading.energy ?? 0) - previousEnergy));
+  const timingIntent = timingIntentForSample(category, sceneCategory, reading.energy ?? 0, trend);
+  const lightingIntent = lightingIntentForSample(category, sceneCategory, reading.energy ?? 0, trend);
   const frame = {
     time,
     source: trainingCapture.source ?? inputMode,
     genre: elements.genreProfile.value,
     sample_category: category,
     sample_tag: normalizeSampleTag(elements.sampleTagInput.value),
-    scene_category: sceneCategoryForSample(category, sceneChanged),
+    scene_category: sceneCategory,
+    lighting_intent: lightingIntent,
+    timing_intent: timingIntent,
     scene_pool_hint: scenePoolHint(category),
     intent: intentForSample(category, reading.energy ?? 0),
     energy: roundNumber(reading.energy ?? 0, 4),
-    energy_trend: energyTrend(reading.energy_delta ?? ((reading.energy ?? 0) - previousEnergy)),
+    energy_trend: trend,
     spectral_flux: roundNumber(reading.spectral_flux ?? 0, 4),
     component_lanes: componentLanes,
     dominant_component: strongestComponentLane(componentLanes),
     rhythm_split: estimateFastestRhythmSplit(time),
     clock_source: musicalClock.source,
-    light_snapshot: captureLightSnapshot(),
+    light_snapshot: captureLightSnapshot(timingIntent),
   };
   trainingCapture.frames.push(frame);
   elements.currentSampleCategory.textContent = frame.sample_category ?? "-";
   elements.currentSceneCategory.textContent = frame.scene_category ?? "-";
   elements.currentIntent.textContent = frame.intent ?? "-";
+  updateBrainSemantics(frame.lighting_intent, frame.timing_intent);
   elements.currentGesture.textContent = frame.dominant_component ?? frame.clock_source ?? "-";
   elements.currentEnergyTrend.textContent = frame.energy_trend ?? "-";
   updateTrainingEditState();
@@ -2456,28 +2843,160 @@ function energyTrend(delta) {
   return "stable";
 }
 
+function frameScene(frame) {
+  return frame?.final_scene ?? frame?.user_scene ?? null;
+}
+
+function frameSnapshot(frame) {
+  return frameScene(frame)?.light_snapshot ?? frame?.light_snapshot ?? null;
+}
+
+function trainingFramePairAt(time) {
+  let previous = trainingCapture.frames[0] ?? null;
+  let next = null;
+  for (const frame of trainingCapture.frames) {
+    if (frame.time <= time) {
+      previous = frame;
+      continue;
+    }
+    next = frame;
+    break;
+  }
+  return { previous, next };
+}
+
+function nearestTrainingFrameIndexAt(time) {
+  if (!trainingCapture.frames.length) return -1;
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  trainingCapture.frames.forEach((frame, index) => {
+    const distance = Math.abs((frame.time ?? 0) - time);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+  return nearestIndex;
+}
+
+function getTrainingEditKeyInfo(time) {
+  const safeTime = clamp(Number(time ?? trainingCapture.reviewTime ?? 0), 0, trainingCapture.duration || 0);
+  const cue = findTrainingCueAt(safeTime);
+  if (cue?.id) return { key: `cue:${cue.id}`, source: "cue" };
+  const frameIndex = nearestTrainingFrameIndexAt(safeTime);
+  if (frameIndex >= 0) return { key: `frame:${frameIndex}`, source: "frame" };
+  return { key: `time:${Math.round(safeTime * 100)}`, source: "time" };
+}
+
+function getTrainingEditKey(time) {
+  return getTrainingEditKeyInfo(time).key;
+}
+
+function getManualOverrideForTime(time) {
+  const { key, source } = getTrainingEditKeyInfo(time);
+  const override = trainingCapture.manualOverridesByKey?.[key] ?? null;
+  return { key, source, override };
+}
+
+function saveManualOverrideForTime(time, lightStatesSnapshot) {
+  if (!Array.isArray(lightStatesSnapshot)) return null;
+  if (!trainingCapture.manualOverridesByKey) trainingCapture.manualOverridesByKey = {};
+  const { key, source } = getTrainingEditKeyInfo(time);
+  const snapshot = deepCopyLightSnapshot(lightStatesSnapshot);
+  const overrideSource = snapshot.every((state) => state.blackout || state.phaseMode === "off" || state.colorMode === "off")
+    ? "blackout_current_scene"
+    : source;
+  trainingCapture.manualOverridesByKey[key] = {
+    key,
+    time: roundNumber(Number(time ?? 0), 4),
+    edited_at: new Date().toISOString(),
+    source: overrideSource,
+    light_snapshot: snapshot,
+  };
+  lastManualOverrideMissingKey = null;
+  logEvent(`[manual-override] saved key=${key} source=${overrideSource} lights=${snapshot.length}`);
+  return trainingCapture.manualOverridesByKey[key];
+}
+
+function applyManualOverrideForTime(time) {
+  const { key, source, override } = getManualOverrideForTime(time);
+  if (!override?.light_snapshot) return false;
+  if (override.light_snapshot.length !== lights.length) {
+    logEvent(`[manual-override] skipped incompatible snapshot key=${key} lights=${override.light_snapshot.length}/${lights.length}`);
+    return false;
+  }
+  const applied = applyLightSnapshot(override.light_snapshot);
+  if (applied && lastManualOverrideAppliedKey !== key) {
+    logEvent(`[manual-override] applied key=${key} source=${source}`);
+    lastManualOverrideAppliedKey = key;
+  }
+  return applied;
+}
+
+function logManualOverrideMissing(time, fallback) {
+  const { key, source } = getTrainingEditKeyInfo(time);
+  const marker = `${key}:${fallback}`;
+  if (lastManualOverrideMissingKey === marker) return;
+  logEvent(`[manual-override] missing key=${key} source=${source} fallback=${fallback}`);
+  lastManualOverrideMissingKey = marker;
+}
+
+function interpolatedTrainingSnapshot(previousFrame, nextFrame, time) {
+  const previousSnapshot = frameSnapshot(previousFrame);
+  if (!Array.isArray(previousSnapshot)) return null;
+  const nextSnapshot = frameSnapshot(nextFrame);
+  if (!Array.isArray(nextSnapshot) || !nextFrame || nextFrame.time <= previousFrame.time) {
+    return previousSnapshot;
+  }
+  const progress = clamp((time - previousFrame.time) / Math.max(nextFrame.time - previousFrame.time, 0.001), 0, 1);
+  return previousSnapshot.map((state, index) => {
+    const nextState = nextSnapshot[index];
+    const from = Number(state.intensity ?? 0);
+    const to = Number(nextState?.intensity ?? from);
+    return {
+      ...state,
+      intensity: roundNumber(from + (to - from) * progress, 4),
+    };
+  });
+}
+
 function applyTrainingReviewFrame(time) {
   if (trainingCapture.active || !trainingCapture.frames.length) return false;
   trainingCapture.reviewTime = clamp(time, 0, trainingCapture.duration);
-  let frame = trainingCapture.frames[0];
-  for (const candidate of trainingCapture.frames) {
-    if (candidate.time > trainingCapture.reviewTime) break;
-    frame = candidate;
-  }
-  const finalScene = frame.final_scene ?? frame.user_scene ?? null;
+  const { previous: frame, next: nextFrame } = trainingFramePairAt(trainingCapture.reviewTime);
+  if (!frame) return false;
+  const finalScene = frameScene(frame);
   elements.currentSampleCategory.textContent = finalScene?.sample_category ?? frame.sample_category ?? "-";
   elements.currentSceneCategory.textContent = finalScene?.scene_category ?? frame.scene_category ?? "-";
   elements.currentIntent.textContent = finalScene?.intent ?? frame.intent ?? "-";
+  updateBrainSemantics(finalScene?.lighting_intent ?? frame.lighting_intent, finalScene?.timing_intent ?? frame.timing_intent);
   elements.currentGesture.textContent = finalScene?.dominant_component ?? frame.dominant_component ?? frame.clock_source ?? "-";
   elements.currentEnergyTrend.textContent = finalScene?.energy_trend ?? frame.energy_trend ?? "-";
   const cue = findTrainingCueAt(trainingCapture.reviewTime);
   if (cue) selectedTrainingCueId = cue.id;
   updateCueEditor();
   updateMeter(frame.energy ?? 0);
-  if (!applyLightSnapshot(finalScene?.light_snapshot ?? frame.light_snapshot)) {
+  const { override } = getManualOverrideForTime(trainingCapture.reviewTime);
+  let applied = false;
+  if (override?.light_snapshot) {
+    applied = applyManualOverrideForTime(trainingCapture.reviewTime);
+  } else {
+    const fallback = frame.user_scene || frame.final_scene ? "brain" : frame.light_snapshot ? "frame" : cue ? "cue" : "default";
+    logManualOverrideMissing(trainingCapture.reviewTime, fallback);
+    const snapshot = interpolatedTrainingSnapshot(frame, nextFrame, trainingCapture.reviewTime);
+    applied = applyLightSnapshot(snapshot);
+  }
+  if (!applied) {
     if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment") {
       blackoutLights();
     }
+  }
+  reviewRenderFrameCount += 1;
+  const now = performance.now();
+  if (now - lastReviewRenderLogAt >= 1000) {
+    logEvent(`[review-render] fps=${reviewRenderFrameCount} trainingFrames=${trainingCapture.frames.length} interpolated=${Boolean(nextFrame)}`);
+    reviewRenderFrameCount = 0;
+    lastReviewRenderLogAt = now;
   }
   return true;
 }
@@ -2498,6 +3017,7 @@ function pauseTrainingReviewPlayback() {
   reviewAnimationFrame = null;
   stopReviewAudioSource();
   updateReviewPlayButton();
+  updateTrainingEditState();
 }
 
 function currentReviewAudioTime() {
@@ -2519,14 +3039,36 @@ async function toggleTrainingReviewPlayback() {
   reviewPlaybackStartTime = trainingCapture.reviewTime ?? 0;
   const audioStarted = await startReviewAudioAt(reviewPlaybackStartTime);
   reviewPlaybackStartedAt = performance.now();
+  reviewRenderFrameCount = 0;
+  reviewPerfFrameCount = 0;
+  reviewPerfDomWrites = 0;
+  lastReviewRenderLogAt = 0;
+  lastReviewPerfLogAt = 0;
+  lastReviewSyncLogSecond = -1;
+  lastPhaseRenderLogSecond = -1;
   const animateReview = () => {
     const elapsed = (performance.now() - reviewPlaybackStartedAt) / 1000;
-    const rawTime = audioStarted ? currentReviewAudioTime() ?? reviewPlaybackStartTime + elapsed : reviewPlaybackStartTime + elapsed;
-    const time = snapTrainingReviewTime(rawTime);
+    const visualFallbackTime = reviewPlaybackStartTime + elapsed;
+    const audioTime = audioStarted ? currentReviewAudioTime() : null;
+    const time = clamp(audioTime ?? visualFallbackTime, 0, trainingCapture.duration);
+    const syncSecond = Math.floor(time);
+    if (syncSecond !== lastReviewSyncLogSecond) {
+      const driftMs = audioTime === null ? 0 : Math.round((audioTime - visualFallbackTime) * 1000);
+      logEvent(`[review-sync] audioTime=${audioTime === null ? "none" : roundNumber(audioTime, 3)} visualTime=${roundNumber(visualFallbackTime, 3)} driftMs=${driftMs}`);
+      lastReviewSyncLogSecond = syncSecond;
+    }
     applyTrainingReviewFrame(time);
     redrawTrainingReview();
     updatePlayerTime();
-    if (rawTime >= trainingCapture.duration) {
+    reviewPerfFrameCount += 1;
+    const perfNow = performance.now();
+    if (perfNow - lastReviewPerfLogAt >= 1000) {
+      logEvent(`[review-perf] fps=${reviewPerfFrameCount} domWrites=${reviewPerfDomWrites} playingReview=true`);
+      reviewPerfFrameCount = 0;
+      reviewPerfDomWrites = 0;
+      lastReviewPerfLogAt = perfNow;
+    }
+    if (time >= trainingCapture.duration) {
       pauseTrainingReviewPlayback();
       return;
     }
@@ -2534,6 +3076,7 @@ async function toggleTrainingReviewPlayback() {
   };
   reviewAnimationFrame = requestAnimationFrame(animateReview);
   updateReviewPlayButton();
+  updateTrainingEditState();
 }
 
 function stopReviewAudioSource() {
@@ -2657,6 +3200,24 @@ function writeAscii(view, offset, text) {
   }
 }
 
+function setLightOffForScene(state) {
+  state.enabled = false;
+  state.intensity = 0;
+  state.colorMode = "off";
+  state.blackout = true;
+  state.phaseFirstHalf = false;
+  state.phaseSecondHalf = false;
+  state.phaseMode = "off";
+  state.lightingIntent = "blackout";
+  state.timingIntent = "blackout";
+  state.manualColorIndex = trainingColors.findIndex((color) => color.blackout);
+  state.manualRandomColor = null;
+}
+
+function deepCopyLightSnapshot(snapshot) {
+  return JSON.parse(JSON.stringify(snapshot));
+}
+
 function cycleTrainingLight(index, direction = 1) {
   if (!canEditTrainingScene()) return;
   const state = lightStates[index];
@@ -2667,11 +3228,20 @@ function cycleTrainingLight(index, direction = 1) {
   const nextIndex = (currentIndex + direction + trainingColors.length) % trainingColors.length;
   state.manualColorIndex = nextIndex;
   state.manualRandomColor = null;
-  state.intensity = trainingColors[nextIndex].blackout ? 0 : 1;
+  if (trainingColors[nextIndex].blackout) {
+    setLightOffForScene(state);
+  } else {
+    state.enabled = true;
+    state.colorMode = trainingColors[nextIndex].name === "casual" ? "random" : "manual";
+    state.blackout = false;
+    state.intensity = 1;
+  }
   if (state.phaseFirstHalf === false && state.phaseSecondHalf === false && !trainingColors[nextIndex].blackout) {
     state.phaseFirstHalf = true;
     state.phaseSecondHalf = true;
   }
+  state.phaseMode = phaseModeForState({ ...state, phaseMode: null });
+  state.timingIntent = timingIntentForLightState(state);
   renderLights();
   persistCurrentTrainingFrameScene();
 }
@@ -2694,17 +3264,25 @@ function toggleTrainingLightPhase(event) {
   event.preventDefault();
   event.stopPropagation();
   const phaseButton = event.currentTarget;
+  if (!phaseButton?.classList?.contains("phase-button")) return;
   const light = phaseButton.closest(".light");
+  if (!light) return;
   const index = Number(light.dataset.index);
   const state = lightStates[index];
   if (!state) return;
   if (state.manualColorIndex === null || state.manualColorIndex === undefined) {
     state.manualColorIndex = 0;
     state.intensity = 1;
+    state.enabled = true;
+    state.colorMode = "manual";
+    state.blackout = false;
   }
   if (trainingColors[state.manualColorIndex]?.blackout) {
     state.manualColorIndex = 0;
     state.intensity = 1;
+    state.enabled = true;
+    state.colorMode = "manual";
+    state.blackout = false;
   }
   if (phaseButton.dataset.phase === "first") {
     if (state.phaseFirstHalf === true && state.phaseSecondHalf === false) {
@@ -2730,6 +3308,8 @@ function toggleTrainingLightPhase(event) {
     }
   }
   state.intensity = state.phaseFirstHalf || state.phaseSecondHalf ? 1 : 0;
+  state.phaseMode = phaseModeForState({ ...state, phaseMode: null });
+  state.timingIntent = timingIntentForLightState(state);
   renderLights();
   persistCurrentTrainingFrameScene();
 }
@@ -2737,15 +3317,38 @@ function toggleTrainingLightPhase(event) {
 function clearTrainingLights() {
   if (!canEditTrainingScene()) return;
   lightStates.forEach((state) => {
-    state.manualColorIndex = null;
-    state.manualRandomColor = null;
-    state.intensity = 0;
     state.age = 999;
-    state.phaseFirstHalf = true;
-    state.phaseSecondHalf = true;
+    setLightOffForScene(state);
   });
   renderLights();
   persistCurrentTrainingFrameScene();
+}
+
+function blackoutCurrentTrainingScene() {
+  if (!canEditTrainingScene()) return;
+  const key = getTrainingEditKey(currentPlaybackTime());
+  lightStates.forEach((state) => {
+    state.age = 999;
+    setLightOffForScene(state);
+  });
+  renderLights();
+  persistCurrentTrainingFrameScene();
+  logEvent(`[blackout] current scene only key=${key}`);
+  logEvent("[scene-edit] blackout current scene");
+}
+
+function copyCurrentTrainingScene() {
+  if (!canEditTrainingScene()) return;
+  copiedTrainingScene = deepCopyLightSnapshot(captureLightSnapshot());
+  logEvent("[scene-edit] copied current scene");
+  updateTrainingEditState();
+}
+
+function pasteCopiedTrainingScene() {
+  if (!canEditTrainingScene() || !copiedTrainingScene) return;
+  applyLightSnapshot(deepCopyLightSnapshot(copiedTrainingScene));
+  persistCurrentTrainingFrameScene();
+  logEvent("[scene-edit] pasted scene");
 }
 
 function saveTrainingAnnotation() {
@@ -2773,14 +3376,17 @@ function saveTrainingAnnotation() {
       sample_category: sceneEvent?.sample_category ?? rhythmEvent?.sample_category ?? finalScene?.sample_category ?? captureFrame?.sample_category ?? null,
       genre_affinity: captureFrame?.genre ?? elements.genreProfile.value,
       intent: sceneEvent?.intent ?? finalScene?.intent ?? captureFrame?.intent ?? null,
+      lighting_intent: finalScene?.lighting_intent ?? captureFrame?.lighting_intent ?? null,
+      timing_intent: finalScene?.timing_intent ?? captureFrame?.timing_intent ?? null,
       rhythm_gesture: rhythmEvent?.gesture ?? finalScene?.dominant_component ?? captureFrame?.clock_source ?? null,
       metadata: sceneEvent?.metadata ?? null,
     },
     desired_lights: lightStates.map((state, index) => {
       const info = positionInfo(index);
       const color = manualLightColor(state);
-      const isBlackout = Boolean(color?.blackout || (state.phaseFirstHalf === false && state.phaseSecondHalf === false));
+      const isBlackout = isLightOffState(state) || Boolean(color?.blackout || (state.phaseFirstHalf === false && state.phaseSecondHalf === false));
       const isCasual = color?.name === "casual";
+      const phaseMode = phaseModeForState(state);
       return {
         index,
         position_name: positionName(index),
@@ -2794,10 +3400,15 @@ function saveTrainingAnnotation() {
         slots_per_quarter: info.slots_per_quarter,
         x: roundNumber(positions[index]?.x ?? 0, 2),
         y: roundNumber(positions[index]?.y ?? 0, 2),
-        color: color?.name ?? "off",
+        enabled: !isBlackout,
+        colorMode: isBlackout ? "off" : state.colorMode ?? (isCasual ? "random" : "manual"),
+        blackout: isBlackout,
+        color: isBlackout ? "off" : color?.name ?? "off",
         rgb: isCasual ? null : color?.value ?? [0, 0, 0],
         random_palette: isCasual ? casualTrainingColors : null,
         intensity: color && !isBlackout ? 1 : 0,
+        phase_mode: phaseMode,
+        timing_intent: timingIntentForLightState(state, finalScene?.timing_intent ?? captureFrame?.timing_intent ?? "sustain"),
         phase: {
           first_half_on: state.phaseFirstHalf !== false,
           second_half_on: state.phaseSecondHalf !== false,
@@ -2849,6 +3460,7 @@ function downloadTrainingAnnotations() {
       duration: trainingCapture.duration,
       frames: trainingCapture.frames,
       cues: trainingCapture.cues,
+      manual_overrides_by_key: trainingCapture.manualOverridesByKey ?? {},
     },
     annotations: trainingAnnotations,
   };
@@ -3086,6 +3698,8 @@ function normalizeLiveDeviceName(name, index) {
 
 async function startLiveAudio() {
   await ensureAudioContext();
+  resetModeVisualState("listen_start");
+  resetLiveLightState("live_start");
   stopPlayback({ resetPosition: false, keepLights: true });
   stopDeviceInput(false);
   stopLiveAudio(false);
@@ -3132,6 +3746,8 @@ function stopLiveAudio(resetUi = true) {
       updatePlayerTime();
     }
     stopTrainingCapture("stopped");
+    resetModeVisualState(resetUi ? "pause" : "live_start");
+    updateTrainingEditState();
   }
 }
 
@@ -3143,6 +3759,8 @@ async function startDeviceInput() {
   }
 
   await ensureAudioContext();
+  resetModeVisualState("listen_start");
+  resetLiveLightState("live_start");
   stopPlayback({ resetPosition: false, keepLights: true });
   stopLiveAudio(false);
   stopDeviceInput(false);
@@ -3194,6 +3812,8 @@ function stopDeviceInput(resetUi = true) {
       updatePlayerTime();
     }
     stopTrainingCapture("stopped");
+    resetModeVisualState(resetUi ? "pause" : "live_start");
+    updateTrainingEditState();
   }
 }
 
@@ -3281,7 +3901,7 @@ elements.seekSlider.addEventListener("input", () => {
 });
 
 elements.trackOverview.addEventListener("click", (event) => {
-  const liveReview = (inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingCapture.frames.length;
+  const liveReview = (inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingReviewModeActive();
   if ((!hasLoadedAudio() || inputMode !== "file") && inputMode !== "timeline" && !liveReview) return;
   const rect = elements.trackOverview.getBoundingClientRect();
   const progress = clamp((event.clientX - rect.left) / rect.width, 0, 1);
@@ -3330,7 +3950,18 @@ elements.genreProfile.addEventListener("change", () => {
 });
 
 elements.lightCount.addEventListener("change", () => {
+  const oldCount = lights.length;
+  const newCount = clamp(Math.round(Number(elements.lightCount.value)), 1, 32);
   buildLights(Number(elements.lightCount.value), false);
+  if (oldCount !== newCount) {
+    const overrideCount = Object.keys(trainingCapture.manualOverridesByKey ?? {}).length;
+    if (overrideCount) {
+      logEvent(`[manual-override] skipped incompatible snapshot count=${overrideCount} old=${oldCount} new=${newCount}`);
+    }
+    trainingCapture.manualOverridesByKey = {};
+    logEvent(`[layout] light count changed old=${oldCount} new=${newCount}`);
+  }
+  resetModeVisualState("layout");
   logEvent(`lights ${elements.lightCount.value}`);
 });
 
@@ -3342,6 +3973,9 @@ elements.trainingMode.addEventListener("change", () => {
   document.body.classList.toggle("is-training", isTrainingMode());
   if (!isTrainingMode()) {
     stopTrainingCapture("off");
+    resetModeVisualState("training_off");
+  } else {
+    resetModeVisualState("training_on");
   }
   updateTrainingEditState();
   updatePlayerTime();
@@ -3374,6 +4008,10 @@ elements.cueProbabilityInput.addEventListener("input", () => {
   cue.probability = roundNumber(clamp(Number(elements.cueProbabilityInput.value), 0, 1), 3);
   elements.cueProbabilityInput.value = String(cue.probability);
 });
+
+elements.blackoutSceneButton.addEventListener("click", blackoutCurrentTrainingScene);
+elements.copySceneButton.addEventListener("click", copyCurrentTrainingScene);
+elements.pasteSceneButton.addEventListener("click", pasteCopiedTrainingScene);
 
 elements.resetLayoutButton.addEventListener("click", () => {
   buildLights(Number(elements.lightCount.value), false);

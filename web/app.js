@@ -142,6 +142,11 @@ let reviewPerfFrameCount = 0;
 let reviewPerfDomWrites = 0;
 let lastManualOverrideAppliedKey = null;
 let lastManualOverrideMissingKey = null;
+let lastEditKeyLogAt = 0;
+let lastBrainSourceLogSecond = -1;
+let lastTrainingAuditAt = 0;
+let lastTrainingAuditReason = "";
+let trainingReviewAuditedAfterCapture = false;
 let overviewCacheCanvas;
 let previousSpectrum;
 let sceneVariant = 0;
@@ -915,9 +920,12 @@ function triggerPattern(context) {
     lightStates[index].enabled = true;
     lightStates[index].colorMode = "auto";
     lightStates[index].blackout = false;
+    lightStates[index].manualColorIndex = null;
+    lightStates[index].manualRandomColor = null;
     lightStates[index].phaseFirstHalf = phase.first;
     lightStates[index].phaseSecondHalf = phase.second;
     lightStates[index].phaseMode = phase.mode;
+    lightStates[index] = normalizeLightState(lightStates[index], { index, timingIntent: sceneTimingIntent });
   });
 
   blackoutNonActive(activeIndexes, context.strong ? 0.08 : 0.025);
@@ -1109,13 +1117,12 @@ function blackoutNonActive(activeIndexes, maxIntensity) {
 }
 
 function blackoutLights() {
-  lightStates.forEach((state) => {
-    state.intensity = 0;
+  lightStates.forEach((state, index) => {
+    setLightOffForScene(state);
     state.age = 999;
-    state.timingIntent = "blackout";
     if (!isTrainingMode()) {
       state.manualColorIndex = null;
-      state.manualRandomColor = null;
+      lightStates[index] = normalizeLightState(state, { index, timingIntent: "blackout" });
     }
   });
   renderLights();
@@ -1161,16 +1168,145 @@ function hslToRgb(hue, saturation, lightness) {
 }
 
 function manualLightColor(state) {
+  if (state.colorMode === "random" && state.manualRandomColor) {
+    return { name: "casual", value: state.manualRandomColor, randomizeOnPlayback: true };
+  }
   if (state.manualColorIndex === null || state.manualColorIndex === undefined) return null;
   const color = trainingColors[state.manualColorIndex];
   if (!color) return null;
   if (color.name === "casual") {
-    return { ...color, value: [245, 247, 248], randomizeOnPlayback: true };
+    return { ...color, value: state.manualRandomColor ?? [245, 247, 248], randomizeOnPlayback: true };
   }
   return color;
 }
 
+function phaseModeFromHalves(first, second) {
+  if (first && second) return "full_beat";
+  if (first) return "first_half";
+  if (second) return "second_half";
+  return "off";
+}
+
+function phaseHalvesForMode(phaseMode) {
+  if (phaseMode === "first_half") return { first: true, second: false };
+  if (phaseMode === "second_half") return { first: false, second: true };
+  if (phaseMode === "off") return { first: false, second: false };
+  return { first: true, second: true };
+}
+
+function stableCasualColor(context = {}) {
+  const stablePalette = casualTrainingColors.filter((_color, index) => index !== 4);
+  const seed = Number(context.index ?? context.fixtureIndex ?? context.colorIndex ?? 0);
+  const paletteIndex = Math.abs(Math.round(seed)) % stablePalette.length;
+  return [...stablePalette[paletteIndex]];
+}
+
+function timingIntentPhaseMode(timingIntent, context = {}) {
+  if (timingIntent === "pulse_first_half") return "first_half";
+  if (timingIntent === "pulse_second_half") return "second_half";
+  if (timingIntent === "pulse_full_beat") return "full_beat";
+  if (timingIntent === "blackout") return "off";
+  if (timingIntent === "alternate_halves" || timingIntent === "strobe_like") {
+    const index = Number(context.index ?? context.fixtureIndex ?? 0);
+    return index % 2 === 0 ? "first_half" : "second_half";
+  }
+  return null;
+}
+
+function finalTimingIntentForPhase(phaseMode, rawTimingIntent) {
+  if (phaseMode === "off") return "blackout";
+  if (phaseMode === "first_half") return "pulse_first_half";
+  if (phaseMode === "second_half") return "pulse_second_half";
+  if (phaseMode === "full_beat" && rawTimingIntent === "pulse_full_beat") return "pulse_full_beat";
+  if (phaseMode === "full_beat" && (rawTimingIntent === "alternate_halves" || rawTimingIntent === "strobe_like")) return rawTimingIntent;
+  return "sustain";
+}
+
+function normalizeLightState(rawState = {}, context = {}) {
+  const casualIndex = trainingColors.findIndex((color) => color.name === "casual");
+  const blackoutIndex = trainingColors.findIndex((color) => color.blackout);
+  const manualColorIndex = rawState.manualColorIndex === undefined ? null : rawState.manualColorIndex;
+  const manualColor = manualColorIndex === null ? null : trainingColors[manualColorIndex];
+  const timingIntent = context.timingIntent ?? rawState.timingIntent ?? context.sceneTimingIntent ?? "sustain";
+  let phaseMode = rawState.phaseMode ?? null;
+  if (!phaseMode) {
+    phaseMode = timingIntentPhaseMode(timingIntent, context);
+  }
+  if (!phaseMode) {
+    phaseMode = phaseModeFromHalves(rawState.phaseFirstHalf !== false, rawState.phaseSecondHalf !== false);
+  }
+  if (!["full_beat", "first_half", "second_half", "off"].includes(phaseMode)) {
+    phaseMode = "full_beat";
+  }
+  if (timingIntent === "pulse_first_half") phaseMode = "first_half";
+  if (timingIntent === "pulse_second_half") phaseMode = "second_half";
+  if (timingIntent === "pulse_full_beat") phaseMode = "full_beat";
+  if (timingIntent === "blackout") phaseMode = "off";
+
+  const rawIntensity = clamp(Number(rawState.intensity ?? 0), 0, 1);
+  const off = rawState.enabled === false
+    || rawState.blackout === true
+    || rawState.colorMode === "off"
+    || manualColor?.blackout
+    || timingIntent === "blackout"
+    || phaseMode === "off"
+    || rawIntensity <= 0;
+
+  if (off) {
+    return {
+      ...rawState,
+      enabled: false,
+      intensity: 0,
+      age: Number(rawState.age ?? 0),
+      colorIndex: clamp(Math.round(Number(rawState.colorIndex ?? context.index ?? 0)), 0, colors.length - 1),
+      manualColorIndex: manualColor?.blackout ? manualColorIndex : blackoutIndex,
+      manualRandomColor: null,
+      colorMode: "off",
+      blackout: true,
+      lightingIntent: "blackout",
+      timingIntent: "blackout",
+      phaseMode: "off",
+      phaseFirstHalf: false,
+      phaseSecondHalf: false,
+    };
+  }
+
+  const randomColorMode = rawState.colorMode === "random" || manualColorIndex === casualIndex || manualColor?.name === "casual";
+  const normalizedPhase = phaseHalvesForMode(phaseMode);
+  const finalTimingIntent = finalTimingIntentForPhase(phaseMode, timingIntent);
+  const finalLightingIntent = finalTimingIntent === "blackout"
+    ? "blackout"
+    : finalTimingIntent === "pulse_first_half" || finalTimingIntent === "pulse_second_half" || finalTimingIntent === "pulse_full_beat"
+      ? "pulse"
+      : finalTimingIntent === "alternate_halves"
+        ? "alternating_pulse"
+        : finalTimingIntent === "strobe_like"
+          ? "strobe_like"
+          : rawState.lightingIntent ?? context.lightingIntent ?? "sustain";
+  return {
+    ...rawState,
+    enabled: rawState.enabled !== false,
+    intensity: rawIntensity,
+    age: Number(rawState.age ?? 0),
+    colorIndex: clamp(Math.round(Number(rawState.colorIndex ?? context.index ?? 0)), 0, colors.length - 1),
+    manualColorIndex,
+    manualRandomColor: randomColorMode ? (rawState.manualRandomColor ?? stableCasualColor({ ...context, colorIndex: rawState.colorIndex })) : null,
+    colorMode: randomColorMode ? "random" : rawState.colorMode ?? (manualColorIndex === null ? "auto" : "manual"),
+    blackout: false,
+    lightingIntent: finalLightingIntent,
+    timingIntent: finalTimingIntent,
+    phaseMode,
+    phaseFirstHalf: normalizedPhase.first,
+    phaseSecondHalf: normalizedPhase.second,
+  };
+}
+
 function lightOffReason(state) {
+  if (!state) return "missing_state";
+  if (state?.phaseMode !== "off") {
+    const normalized = normalizeLightState(state);
+    if (normalized.phaseMode === "off") return "blackout";
+  }
   if (state.enabled === false) return "manual_scene";
   if (state.blackout) return "blackout";
   if (state.colorMode === "off") return "blackout";
@@ -1186,8 +1322,9 @@ function isLightOffState(state) {
 }
 
 function phaseStateForLight(state) {
-  const phaseMode = phaseModeForState(state);
-  const off = isLightOffState(state) || phaseMode === "off";
+  const normalized = normalizeLightState(state);
+  const phaseMode = normalized.phaseMode;
+  const off = phaseMode === "off";
   return {
     phaseMode,
     firstOn: !off && (phaseMode === "first_half" || phaseMode === "full_beat"),
@@ -1300,8 +1437,8 @@ function resetLiveLightState(reason) {
 
 function phaseModeSummary() {
   const counts = { first: 0, second: 0, full: 0, off: 0 };
-  lightStates.forEach((state) => {
-    const phaseState = phaseStateForLight(state);
+  lightStates.forEach((state, index) => {
+    const phaseState = phaseStateForLight(normalizeLightState(state, { index }));
     if (phaseState.off) counts.off += 1;
     else if (phaseState.phaseMode === "first_half") counts.first += 1;
     else if (phaseState.phaseMode === "second_half") counts.second += 1;
@@ -1310,10 +1447,23 @@ function phaseModeSummary() {
   return `first:${counts.first} second:${counts.second} full:${counts.full} off:${counts.off}`;
 }
 
-function updateBrainSemantics(lightingIntent, timingIntent) {
+function phaseModeSummaryForSnapshot(snapshot) {
+  const counts = { first: 0, second: 0, full: 0, off: 0 };
+  if (!Array.isArray(snapshot)) return phaseModeSummary();
+  snapshot.forEach((state, index) => {
+    const phaseState = phaseStateForLight(normalizeLightState(state, { index }));
+    if (phaseState.off) counts.off += 1;
+    else if (phaseState.phaseMode === "first_half") counts.first += 1;
+    else if (phaseState.phaseMode === "second_half") counts.second += 1;
+    else counts.full += 1;
+  });
+  return `first:${counts.first} second:${counts.second} full:${counts.full} off:${counts.off}`;
+}
+
+function updateBrainSemantics(lightingIntent, timingIntent, phaseSummaryOverride) {
   if (lightingIntent !== undefined && elements.currentLightingIntent) elements.currentLightingIntent.textContent = lightingIntent ?? "-";
   if (timingIntent !== undefined && elements.currentTimingIntent) elements.currentTimingIntent.textContent = timingIntent ?? "-";
-  if (elements.currentPhaseSummary) elements.currentPhaseSummary.textContent = phaseModeSummary();
+  if (elements.currentPhaseSummary) elements.currentPhaseSummary.textContent = phaseSummaryOverride ?? phaseModeSummary();
 }
 
 function logLightOff(index, reason) {
@@ -1330,11 +1480,12 @@ function renderLights() {
   const reviewTime = phaseAnimatedMode ? currentPlaybackTime() : trainingCapture.reviewTime ?? currentPlaybackTime();
   const beatPhase = phaseAnimatedMode ? currentBeatPhaseAt(reviewTime).phase : null;
   lights.forEach((light, index) => {
-    const state = lightStates[index] ?? { intensity: 0, colorIndex: index % colors.length };
+    const state = normalizeLightState(lightStates[index] ?? { intensity: 0, colorIndex: index % colors.length }, { index });
+    lightStates[index] = state;
     const manual = state.manualColorIndex !== null && state.manualColorIndex !== undefined;
     const manualColor = manualLightColor(state);
     const color = manualColor ?? colors[state.colorIndex];
-    let manualCasual = Boolean(manual && manualColor?.name === "casual");
+    let manualCasual = Boolean(editStaticMode && manual && manualColor?.name === "casual");
     const [r, g, b] = color.value;
     const phaseState = phaseStateForLight(state);
     if (phaseState.off) manualCasual = false;
@@ -1490,6 +1641,14 @@ function handleLiveAudioFrame(frame) {
     });
     updateMeter(energy);
     updatePlayerTime();
+    maybeLogBrainSource({
+      mode: trainingCapture.active ? "training" : "live",
+      time,
+      sample: frame.sample_category ?? "silence_or_pause",
+      timing: timingIntentForSample(frame.sample_category ?? "silence_or_pause", null, energy, energyTrend(Number(frame.energy_delta ?? 0))),
+      usesLiveFrame: true,
+      usesTrainingFrame: false,
+    });
     maybeLogLiveFrame(frame);
     rememberPreviousAudioState({
       energy,
@@ -1513,6 +1672,14 @@ function handleLiveAudioFrame(frame) {
   });
   updateMeter(energy);
   updatePlayerTime();
+  maybeLogBrainSource({
+    mode: trainingCapture.active ? "training" : "live",
+    time,
+    sample: frame.sample_category ?? categoryForEnergy(energy),
+    timing: timingIntentForSample(frame.sample_category ?? categoryForEnergy(energy), null, energy, energyTrend(Number(frame.energy_delta ?? 0))),
+    usesLiveFrame: true,
+    usesTrainingFrame: false,
+  });
   maybeLogLiveFrame(frame);
   previousSpectrum = new Uint8Array(frequencyData);
   maybeFinishTrainingCapture(time);
@@ -1528,6 +1695,21 @@ function maybeLogLiveFrame(frame) {
     + `energy:${Math.round((frame.energy ?? 0) * 100)}% `
     + `pcm:${audioSamples}@${frame.audio_sample_rate ?? "-"}`
   );
+}
+
+function maybeLogBrainSource({ mode, time, sample, timing, usesLiveFrame, usesTrainingFrame, phaseSummary }) {
+  const second = Math.floor(Number(time ?? 0));
+  if (second === lastBrainSourceLogSecond) return;
+  lastBrainSourceLogSecond = second;
+  logEvent(
+    `[brain-source] mode=${mode} inputMode=${inputMode} trainingActive=${trainingCapture.active} `
+    + `usesLiveFrame=${usesLiveFrame} usesTrainingFrame=${usesTrainingFrame} `
+    + `usesSpectrogramVisual=false time=${roundNumber(Number(time ?? 0), 3)} `
+    + `sample=${sample ?? "-"} timing=${timing ?? "-"} phaseSummary=${phaseSummary ?? phaseModeSummary()}`
+  );
+  if ((inputMode === "mic_device" || inputMode === "system_audio") && isPlaying && !isTrainingMode() && usesTrainingFrame) {
+    logEvent("[bug] live_using_training_frames");
+  }
 }
 
 function maybeLogSignal(energy) {
@@ -2108,13 +2290,7 @@ function currentBeatPhaseAt(time) {
 }
 
 function phaseModeForState(state) {
-  if (state.phaseMode) return state.phaseMode;
-  const first = state.phaseFirstHalf !== false;
-  const second = state.phaseSecondHalf !== false;
-  if (first && second) return "full_beat";
-  if (first) return "first_half";
-  if (second) return "second_half";
-  return "off";
+  return normalizeLightState(state).phaseMode;
 }
 
 function applyPhaseEnvelope(intensity, state, beatPhase, timingIntent, isPlayingReview) {
@@ -2135,15 +2311,8 @@ function applyPhaseEnvelope(intensity, state, beatPhase, timingIntent, isPlaying
 }
 
 function timingIntentForLightState(state, sceneTimingIntent = "sustain") {
-  const phaseMode = phaseModeForState(state);
-  if (phaseMode === "off") return "blackout";
-  if (phaseMode === "first_half") return "pulse_first_half";
-  if (phaseMode === "second_half") return "pulse_second_half";
-  if (sceneTimingIntent === "blackout") return "blackout";
-  if (sceneTimingIntent === "strobe_like") return "strobe_like";
-  if (sceneTimingIntent === "alternate_halves") return "alternate_halves";
-  if (sceneTimingIntent === "fade_sustain") return "sustain";
-  return sceneTimingIntent === "pulse_full_beat" ? "pulse_full_beat" : "sustain";
+  const normalized = normalizeLightState(state, { sceneTimingIntent });
+  return normalized.timingIntent;
 }
 
 function timingIntentForSample(category, sceneCategory, energy, trend = "stable") {
@@ -2175,22 +2344,24 @@ function lightingIntentForSample(category, sceneCategory, energy, trend = "stabl
 }
 
 function captureLightSnapshot(sceneTimingIntent = "sustain") {
-  return lightStates.map((state) => {
-    const phaseState = phaseStateForLight(state);
+  return lightStates.map((state, index) => {
+    const normalized = normalizeLightState(state, { index, sceneTimingIntent });
+    lightStates[index] = normalized;
+    const phaseState = phaseStateForLight(normalized);
     return {
-      enabled: state.enabled !== false && !phaseState.off,
-      intensity: roundNumber(state.intensity ?? 0, 4),
-      age: state.age ?? 0,
-      colorIndex: state.colorIndex ?? 0,
-      manualColorIndex: state.manualColorIndex ?? null,
-      manualRandomColor: state.manualRandomColor ?? null,
-      colorMode: phaseState.off ? "off" : state.colorMode ?? (state.manualColorIndex === null || state.manualColorIndex === undefined ? "auto" : "manual"),
-      blackout: Boolean(state.blackout || phaseState.off),
+      enabled: normalized.enabled !== false && !phaseState.off,
+      intensity: roundNumber(normalized.intensity ?? 0, 4),
+      age: normalized.age ?? 0,
+      colorIndex: normalized.colorIndex ?? 0,
+      manualColorIndex: normalized.manualColorIndex ?? null,
+      manualRandomColor: normalized.manualRandomColor ?? null,
+      colorMode: normalized.colorMode,
+      blackout: Boolean(normalized.blackout || phaseState.off),
       phaseFirstHalf: phaseState.firstOn,
       phaseSecondHalf: phaseState.secondOn,
       phaseMode: phaseState.phaseMode,
-      lightingIntent: state.lightingIntent ?? (phaseState.off ? "blackout" : "sustain"),
-      timingIntent: timingIntentForLightState(state, state.timingIntent ?? sceneTimingIntent),
+      lightingIntent: normalized.lightingIntent ?? (phaseState.off ? "blackout" : "sustain"),
+      timingIntent: normalized.timingIntent,
     };
   });
 }
@@ -2199,21 +2370,22 @@ function applyLightSnapshot(snapshot) {
   if (!Array.isArray(snapshot)) return false;
   snapshot.forEach((state, index) => {
     if (!lightStates[index]) return;
+    const normalized = normalizeLightState(state, { index });
     lightStates[index] = {
       ...lightStates[index],
-      intensity: clamp(Number(state.intensity ?? 0), 0, 1),
-      age: Number(state.age ?? 0),
-      colorIndex: clamp(Math.round(Number(state.colorIndex ?? 0)), 0, colors.length - 1),
-      manualColorIndex: state.manualColorIndex,
-      manualRandomColor: state.manualRandomColor,
-      enabled: state.enabled !== false,
-      colorMode: state.colorMode ?? "auto",
-      blackout: Boolean(state.blackout),
-      phaseFirstHalf: state.phaseFirstHalf !== false,
-      phaseSecondHalf: state.phaseSecondHalf !== false,
-      phaseMode: state.phaseMode ?? phaseModeForState(state),
-      lightingIntent: state.lightingIntent,
-      timingIntent: state.timingIntent ?? timingIntentForLightState(state),
+      intensity: normalized.intensity,
+      age: normalized.age,
+      colorIndex: normalized.colorIndex,
+      manualColorIndex: normalized.manualColorIndex,
+      manualRandomColor: normalized.manualRandomColor,
+      enabled: normalized.enabled,
+      colorMode: normalized.colorMode,
+      blackout: normalized.blackout,
+      phaseFirstHalf: normalized.phaseFirstHalf,
+      phaseSecondHalf: normalized.phaseSecondHalf,
+      phaseMode: normalized.phaseMode,
+      lightingIntent: normalized.lightingIntent,
+      timingIntent: normalized.timingIntent,
     };
   });
   renderLights();
@@ -2442,7 +2614,12 @@ function nearestCueHit(time) {
   return [...manual, ...automatic].sort((left, right) => left.distance - right.distance)[0] ?? null;
 }
 
-function toggleTrainingCueAt(time) {
+function toggleTrainingCueAt(time, source = "manual") {
+  const before = trainingCapture.cues.length + trainingReviewAutomaticCueTimes().length - (trainingCapture.suppressedCueTimes?.length ?? 0);
+  logEvent(
+    `[cue-edit] action=toggle time=${roundNumber(time, 4)} before=${before} `
+    + `nearestFrameMs=${nearestFrameDistanceMs(time) ?? "-"} source=${source}`
+  );
   const hit = nearestCueHit(time);
   if (hit?.type === "manual") {
     const [removed] = trainingCapture.cues.splice(hit.index, 1);
@@ -2451,6 +2628,9 @@ function toggleTrainingCueAt(time) {
     updateTrainingSummary();
     redrawTrainingReview();
     logEvent(`cue removed ${removed.name}`);
+    logEvent(`[cue-edit] removed id=${removed.id} time=${roundNumber(removed.time, 4)}`);
+    const after = trainingCapture.cues.length + trainingReviewAutomaticCueTimes().length - (trainingCapture.suppressedCueTimes?.length ?? 0);
+    logEvent(`[cue-edit] action=toggle time=${roundNumber(time, 4)} after=${after}`);
     return;
   }
   if (hit?.type === "automatic") {
@@ -2461,9 +2641,15 @@ function toggleTrainingCueAt(time) {
     updateTrainingSummary();
     redrawTrainingReview();
     logEvent(`auto cue removed ${formatTime(Math.floor(hit.time))}`);
+    logEvent(`[cue-edit] removed id=auto time=${roundNumber(hit.time, 4)}`);
+    const after = trainingCapture.cues.length + trainingReviewAutomaticCueTimes().length - (trainingCapture.suppressedCueTimes?.length ?? 0);
+    logEvent(`[cue-edit] action=toggle time=${roundNumber(time, 4)} after=${after}`);
     return;
   }
-  addTrainingCue(time);
+  const cue = addTrainingCue(time);
+  if (cue) logEvent(`[cue-edit] added id=${cue.id} time=${roundNumber(cue.time, 4)}`);
+  const after = trainingCapture.cues.length + trainingReviewAutomaticCueTimes().length - (trainingCapture.suppressedCueTimes?.length ?? 0);
+  logEvent(`[cue-edit] action=toggle time=${roundNumber(time, 4)} after=${after}`);
 }
 
 function addTrainingCue(time) {
@@ -2494,6 +2680,7 @@ function addTrainingCue(time) {
   updateTrainingSummary();
   redrawTrainingReview();
   logEvent(`cue ${cue.name} ${formatTime(Math.floor(cueTime))}`);
+  return cue;
 }
 
 function selectedTrainingCue() {
@@ -2578,6 +2765,10 @@ function redrawTrainingReview() {
   if (!trainingReviewAvailable()) return;
   const frame = findTrainingFrameAt(currentPlaybackTime()) ?? trainingCapture.frames.at(-1);
   drawComponentLanes(frame?.component_lanes ?? null, currentPlaybackTime());
+  if (!trainingCapture.active && trainingCapture.frames.length && !trainingReviewAuditedAfterCapture) {
+    auditTrainingReview("redraw_after_capture");
+    trainingReviewAuditedAfterCapture = true;
+  }
 }
 
 async function seekToSliderValue(value) {
@@ -2599,6 +2790,7 @@ async function seekToSliderValue(value) {
     pauseTrainingReviewPlayback();
     const rawTime = (Number(value) / 1000) * trainingCapture.duration;
     const time = snapTrainingReviewTime(rawTime);
+    auditTrainingReview("review_scrub");
     applyTrainingReviewFrame(time);
     redrawTrainingReview();
     updatePlayerTime();
@@ -2608,6 +2800,7 @@ async function seekToSliderValue(value) {
     pauseTrainingReviewPlayback();
     const rawTime = (Number(value) / 1000) * trainingCapture.duration;
     const time = snapTrainingReviewTime(rawTime);
+    auditTrainingReview("review_scrub");
     if (audioElement) {
       audioElement.currentTime = clamp(time, 0, getAudioDuration());
     }
@@ -2666,6 +2859,119 @@ function selectedTrainingDuration() {
   return Math.max(1, Number(elements.trainingDuration?.value ?? 30));
 }
 
+function nearestFrameDistanceMs(time) {
+  if (!trainingCapture.frames.length) return null;
+  const nearest = trainingCapture.frames.reduce((best, frame) => {
+    const distance = Math.abs(Number(frame.time ?? 0) - time);
+    return distance < best ? distance : best;
+  }, Infinity);
+  return Number.isFinite(nearest) ? Math.round(nearest * 1000) : null;
+}
+
+function nearestCueDistanceMs(time) {
+  const cues = trainingReviewCueTimes();
+  if (!cues.length) return null;
+  const nearest = cues.reduce((best, cueTime) => {
+    const distance = Math.abs(Number(cueTime ?? 0) - time);
+    return distance < best ? distance : best;
+  }, Infinity);
+  return Number.isFinite(nearest) ? Math.round(nearest * 1000) : null;
+}
+
+function maxRepeatedStreak(frames, property) {
+  let maxStreak = 0;
+  let currentStreak = 0;
+  let previousValue;
+  frames.forEach((frame) => {
+    const value = frame?.[property] ?? null;
+    currentStreak = value === previousValue ? currentStreak + 1 : 1;
+    previousValue = value;
+    maxStreak = Math.max(maxStreak, currentStreak);
+  });
+  return maxStreak;
+}
+
+function auditTrainingFrameIntegrity(reason = "manual") {
+  const frames = trainingCapture.frames ?? [];
+  let duplicate = 0;
+  let outOfOrder = 0;
+  let zeroEnergy = 0;
+  let dtBelow50ms = 0;
+  let dtBelow100ms = 0;
+  const deltas = [];
+  const seenTimes = new Set();
+  frames.forEach((frame, index) => {
+    const time = Number(frame?.time ?? 0);
+    const roundedTime = roundNumber(time, 4);
+    if (seenTimes.has(roundedTime)) duplicate += 1;
+    seenTimes.add(roundedTime);
+    if (Number(frame?.energy ?? 0) <= 0) zeroEnergy += 1;
+    if (index > 0) {
+      const previousTime = Number(frames[index - 1]?.time ?? 0);
+      const delta = time - previousTime;
+      if (delta < 0) outOfOrder += 1;
+      if (Number.isFinite(delta)) {
+        deltas.push(delta);
+        if (delta < 0.05) dtBelow50ms += 1;
+        if (delta < 0.1) dtBelow100ms += 1;
+      }
+    }
+  });
+  const minDt = deltas.length ? Math.min(...deltas) : 0;
+  const maxDt = deltas.length ? Math.max(...deltas) : 0;
+  const avgDt = deltas.length ? average(deltas) : 0;
+  logEvent(
+    `[frame-integrity] reason=${reason} frames=${frames.length} duplicate=${duplicate} `
+    + `outOfOrder=${outOfOrder} zeroEnergy=${zeroEnergy} minDt=${roundNumber(minDt, 4)} `
+    + `avgDt=${roundNumber(avgDt, 4)} maxDt=${roundNumber(maxDt, 4)} `
+    + `dtBelow50ms=${dtBelow50ms} dtBelow100ms=${dtBelow100ms} `
+    + `repeatedCategoryMax=${maxRepeatedStreak(frames, "sample_category")} `
+    + `repeatedTimingMax=${maxRepeatedStreak(frames, "timing_intent")}`
+  );
+}
+
+function auditFrameAccess(reason = "manual") {
+  const frames = trainingCapture.frames ?? [];
+  const cues = trainingReviewCueTimes();
+  const threshold = Math.max(0.1, cueHitThresholdSeconds());
+  const nearestDistances = frames.map((frame) => {
+    const time = Number(frame?.time ?? 0);
+    if (!cues.length) return Infinity;
+    return cues.reduce((nearest, cueTime) => Math.min(nearest, Math.abs(time - cueTime)), Infinity);
+  });
+  const finiteDistances = nearestDistances.filter(Number.isFinite);
+  const framesWithoutNearbyCue = nearestDistances.filter((distance) => !Number.isFinite(distance) || distance > threshold).length;
+  let maxFramesBetweenCues = frames.length;
+  if (cues.length >= 2) {
+    maxFramesBetweenCues = 0;
+    for (let index = 0; index < cues.length - 1; index += 1) {
+      const start = cues[index];
+      const end = cues[index + 1];
+      const count = frames.filter((frame) => frame.time > start && frame.time < end).length;
+      maxFramesBetweenCues = Math.max(maxFramesBetweenCues, count);
+    }
+  }
+  const avgNearestCueMs = finiteDistances.length ? Math.round(average(finiteDistances) * 1000) : -1;
+  const maxNearestCueMs = finiteDistances.length ? Math.round(Math.max(...finiteDistances) * 1000) : -1;
+  const inaccessibleLikely = frames.length > cues.length && (framesWithoutNearbyCue > Math.max(2, frames.length * 0.35) || maxFramesBetweenCues > 2);
+  logEvent(
+    `[frame-access] reason=${reason} frames=${frames.length} cues=${cues.length} `
+    + `framesWithoutNearbyCue=${framesWithoutNearbyCue} maxFramesBetweenCues=${maxFramesBetweenCues} `
+    + `avgNearestCueMs=${avgNearestCueMs} maxNearestCueMs=${maxNearestCueMs} `
+    + `inaccessibleLikely=${inaccessibleLikely}`
+  );
+}
+
+function auditTrainingReview(reason) {
+  if (!trainingCapture.frames.length) return;
+  const now = performance.now();
+  if (reason === lastTrainingAuditReason && now - lastTrainingAuditAt < 1000) return;
+  lastTrainingAuditAt = now;
+  lastTrainingAuditReason = reason;
+  auditTrainingFrameIntegrity(reason);
+  auditFrameAccess(reason);
+}
+
 function beginTrainingCapture(source) {
   if (!isTrainingMode()) return;
   pauseTrainingReviewPlayback();
@@ -2675,6 +2981,7 @@ function beginTrainingCapture(source) {
     elements.spectrumScroller.scrollLeft = 0;
   }
   componentHistory = [];
+  trainingReviewAuditedAfterCapture = false;
   trainingCapture = {
     active: true,
     frames: [],
@@ -2709,6 +3016,8 @@ function stopTrainingCapture(reason = "stopped") {
   if (trainingCapture.frames.length) {
     applyTrainingReviewFrame(0);
     redrawTrainingReview();
+    auditTrainingReview(`capture_${reason}`);
+    trainingReviewAuditedAfterCapture = true;
   }
   logEvent(
     `training ${reason}: ${trainingCapture.frames.length} frames, `
@@ -2882,14 +3191,25 @@ function nearestTrainingFrameIndexAt(time) {
 function getTrainingEditKeyInfo(time) {
   const safeTime = clamp(Number(time ?? trainingCapture.reviewTime ?? 0), 0, trainingCapture.duration || 0);
   const cue = findTrainingCueAt(safeTime);
-  if (cue?.id) return { key: `cue:${cue.id}`, source: "cue" };
+  const nearestFrameMs = nearestFrameDistanceMs(safeTime);
+  const nearestCueMs = nearestCueDistanceMs(safeTime);
+  if (cue?.id) return { key: `cue:${cue.id}`, source: "cue", nearestFrameMs, nearestCueMs };
   const frameIndex = nearestTrainingFrameIndexAt(safeTime);
-  if (frameIndex >= 0) return { key: `frame:${frameIndex}`, source: "frame" };
-  return { key: `time:${Math.round(safeTime * 100)}`, source: "time" };
+  if (frameIndex >= 0) return { key: `frame:${frameIndex}`, source: "frame", nearestFrameMs, nearestCueMs };
+  return { key: `time:${Math.round(safeTime * 100)}`, source: "time", nearestFrameMs, nearestCueMs };
 }
 
 function getTrainingEditKey(time) {
-  return getTrainingEditKeyInfo(time).key;
+  const info = getTrainingEditKeyInfo(time);
+  const now = performance.now();
+  if (now - lastEditKeyLogAt >= 750) {
+    logEvent(
+      `[edit-key] time=${roundNumber(Number(time ?? 0), 3)} key=${info.key} source=${info.source} `
+      + `nearestFrameMs=${info.nearestFrameMs ?? "-"} nearestCueMs=${info.nearestCueMs ?? "-"}`
+    );
+    lastEditKeyLogAt = now;
+  }
+  return info.key;
 }
 
 function getManualOverrideForTime(time) {
@@ -2962,35 +3282,51 @@ function interpolatedTrainingSnapshot(previousFrame, nextFrame, time) {
 
 function applyTrainingReviewFrame(time) {
   if (trainingCapture.active || !trainingCapture.frames.length) return false;
+  if ((inputMode === "mic_device" || inputMode === "system_audio") && isPlaying && !isTrainingMode()) {
+    logEvent("[bug] live_using_training_frames");
+  }
   trainingCapture.reviewTime = clamp(time, 0, trainingCapture.duration);
   const { previous: frame, next: nextFrame } = trainingFramePairAt(trainingCapture.reviewTime);
   if (!frame) return false;
   const finalScene = frameScene(frame);
-  elements.currentSampleCategory.textContent = finalScene?.sample_category ?? frame.sample_category ?? "-";
-  elements.currentSceneCategory.textContent = finalScene?.scene_category ?? frame.scene_category ?? "-";
-  elements.currentIntent.textContent = finalScene?.intent ?? frame.intent ?? "-";
-  updateBrainSemantics(finalScene?.lighting_intent ?? frame.lighting_intent, finalScene?.timing_intent ?? frame.timing_intent);
-  elements.currentGesture.textContent = finalScene?.dominant_component ?? frame.dominant_component ?? frame.clock_source ?? "-";
-  elements.currentEnergyTrend.textContent = finalScene?.energy_trend ?? frame.energy_trend ?? "-";
   const cue = findTrainingCueAt(trainingCapture.reviewTime);
   if (cue) selectedTrainingCueId = cue.id;
-  updateCueEditor();
-  updateMeter(frame.energy ?? 0);
   const { override } = getManualOverrideForTime(trainingCapture.reviewTime);
+  const snapshot = override?.light_snapshot
+    ?? interpolatedTrainingSnapshot(frame, nextFrame, trainingCapture.reviewTime)
+    ?? frameSnapshot(frame);
+  let phaseSummary = phaseModeSummaryForSnapshot(snapshot);
   let applied = false;
   if (override?.light_snapshot) {
     applied = applyManualOverrideForTime(trainingCapture.reviewTime);
   } else {
     const fallback = frame.user_scene || frame.final_scene ? "brain" : frame.light_snapshot ? "frame" : cue ? "cue" : "default";
     logManualOverrideMissing(trainingCapture.reviewTime, fallback);
-    const snapshot = interpolatedTrainingSnapshot(frame, nextFrame, trainingCapture.reviewTime);
     applied = applyLightSnapshot(snapshot);
   }
   if (!applied) {
     if (frame.sample_category === "silence_or_pause" || frame.sample_category === "stop_music_moment") {
       blackoutLights();
+      phaseSummary = phaseModeSummary();
     }
   }
+  elements.currentSampleCategory.textContent = finalScene?.sample_category ?? frame.sample_category ?? "-";
+  elements.currentSceneCategory.textContent = finalScene?.scene_category ?? frame.scene_category ?? "-";
+  elements.currentIntent.textContent = finalScene?.intent ?? frame.intent ?? "-";
+  updateBrainSemantics(finalScene?.lighting_intent ?? frame.lighting_intent, finalScene?.timing_intent ?? frame.timing_intent, phaseSummary);
+  maybeLogBrainSource({
+    mode: "review",
+    time: trainingCapture.reviewTime,
+    sample: finalScene?.sample_category ?? frame.sample_category,
+    timing: finalScene?.timing_intent ?? frame.timing_intent,
+    usesLiveFrame: false,
+    usesTrainingFrame: true,
+    phaseSummary,
+  });
+  elements.currentGesture.textContent = finalScene?.dominant_component ?? frame.dominant_component ?? frame.clock_source ?? "-";
+  elements.currentEnergyTrend.textContent = finalScene?.energy_trend ?? "-";
+  updateCueEditor();
+  updateMeter(frame.energy ?? 0);
   reviewRenderFrameCount += 1;
   const now = performance.now();
   if (now - lastReviewRenderLogAt >= 1000) {
@@ -3201,17 +3537,19 @@ function writeAscii(view, offset, text) {
 }
 
 function setLightOffForScene(state) {
-  state.enabled = false;
-  state.intensity = 0;
-  state.colorMode = "off";
-  state.blackout = true;
-  state.phaseFirstHalf = false;
-  state.phaseSecondHalf = false;
-  state.phaseMode = "off";
-  state.lightingIntent = "blackout";
-  state.timingIntent = "blackout";
-  state.manualColorIndex = trainingColors.findIndex((color) => color.blackout);
-  state.manualRandomColor = null;
+  Object.assign(state, normalizeLightState({
+    ...state,
+    enabled: false,
+    intensity: 0,
+    colorMode: "off",
+    blackout: true,
+    phaseMode: "off",
+    phaseFirstHalf: false,
+    phaseSecondHalf: false,
+    lightingIntent: "blackout",
+    timingIntent: "blackout",
+    manualRandomColor: null,
+  }, { timingIntent: "blackout" }));
 }
 
 function deepCopyLightSnapshot(snapshot) {
@@ -3235,6 +3573,8 @@ function cycleTrainingLight(index, direction = 1) {
     state.colorMode = trainingColors[nextIndex].name === "casual" ? "random" : "manual";
     state.blackout = false;
     state.intensity = 1;
+    if (state.timingIntent === "blackout") state.timingIntent = "sustain";
+    if (state.lightingIntent === "blackout") state.lightingIntent = "sustain";
   }
   if (state.phaseFirstHalf === false && state.phaseSecondHalf === false && !trainingColors[nextIndex].blackout) {
     state.phaseFirstHalf = true;
@@ -3276,6 +3616,8 @@ function toggleTrainingLightPhase(event) {
     state.enabled = true;
     state.colorMode = "manual";
     state.blackout = false;
+    if (state.timingIntent === "blackout") state.timingIntent = "sustain";
+    if (state.lightingIntent === "blackout") state.lightingIntent = "sustain";
   }
   if (trainingColors[state.manualColorIndex]?.blackout) {
     state.manualColorIndex = 0;
@@ -3283,6 +3625,8 @@ function toggleTrainingLightPhase(event) {
     state.enabled = true;
     state.colorMode = "manual";
     state.blackout = false;
+    if (state.timingIntent === "blackout") state.timingIntent = "sustain";
+    if (state.lightingIntent === "blackout") state.lightingIntent = "sustain";
   }
   if (phaseButton.dataset.phase === "first") {
     if (state.phaseFirstHalf === true && state.phaseSecondHalf === false) {
@@ -3923,7 +4267,7 @@ elements.liveSpectrum.addEventListener("click", (event) => {
 elements.liveSpectrum.addEventListener("contextmenu", (event) => {
   if (!canEditTrainingScene()) return;
   event.preventDefault();
-  toggleTrainingCueAt(cueTimeFromCanvasEvent(event));
+  toggleTrainingCueAt(cueTimeFromCanvasEvent(event), "contextmenu");
 });
 
 elements.reviewPlayButton?.addEventListener("click", () => {

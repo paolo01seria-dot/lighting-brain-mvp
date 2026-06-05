@@ -113,6 +113,7 @@ let loadedTimelineName = "";
 let timelineEvents = [];
 let timelineRhythmEvents = [];
 let timelineDuration = 0;
+let musicalTimeline = createEmptyMusicalTimeline();
 let timelineCurrentEvent = null;
 let timelineCurrentRhythmEvent = null;
 let timelinePausedAt = 0;
@@ -169,6 +170,8 @@ let lastEventSecond = -1;
 let categoryCounters = {};
 let currentSceneByCategory = {};
 let componentHistory = [];
+const enableAdvancedCueEditing = false;
+let cueEditingDisabledLogged = false;
 
 let lights = [];
 let lightStates = [];
@@ -426,6 +429,257 @@ async function loadAudioFile(file) {
   });
 }
 
+function createEmptyMusicalTimeline(source = null, duration = 0) {
+  return {
+    source,
+    duration: Number.isFinite(Number(duration)) ? Number(duration) : 0,
+    segments: [],
+    beats: [],
+    downbeats: [],
+    onsets: [],
+    events: [],
+    lightFrames: [],
+    cursor: {
+      time: 0,
+      frameIndex: -1,
+      beatIndex: -1,
+      segmentIndex: -1,
+    },
+  };
+}
+
+function numericTime(value, fallback = 0) {
+  const time = Number(value);
+  return Number.isFinite(time) ? time : fallback;
+}
+
+function normalizeAllInOneTimeline(raw) {
+  const source = raw?.source ?? raw?.name ?? raw?.track ?? "all_in_one_json";
+  const timeline = raw?.timeline ?? raw ?? {};
+  const missingFields = [];
+  const rawBeats = Array.isArray(timeline.beats) ? timeline.beats : [];
+  const rawDownbeats = Array.isArray(timeline.downbeats) ? timeline.downbeats : [];
+  const rawSegments = Array.isArray(timeline.segments)
+    ? timeline.segments
+    : Array.isArray(timeline.sections)
+      ? timeline.sections
+      : [];
+  const rawBoundaries = Array.isArray(timeline.segment_boundaries) ? timeline.segment_boundaries : [];
+  const rawLabels = Array.isArray(timeline.segment_labels)
+    ? timeline.segment_labels
+    : Array.isArray(timeline.labels)
+      ? timeline.labels
+      : [];
+  const rawOnsets = Array.isArray(timeline.onsets)
+    ? timeline.onsets
+    : Array.isArray(timeline.activations)
+      ? timeline.activations
+      : [];
+  const rawEvents = Array.isArray(timeline.events) ? timeline.events : [];
+
+  [
+    ["beats", rawBeats],
+    ["downbeats", rawDownbeats],
+    ["segments/sections", rawSegments.length ? rawSegments : rawBoundaries],
+    ["onsets/activations", rawOnsets],
+    ["events", rawEvents],
+  ].forEach(([field, value]) => {
+    if (!value.length) missingFields.push(field);
+  });
+
+  const beats = rawBeats.map((beat, index) => {
+    const time = typeof beat === "number" ? beat : numericTime(beat.time ?? beat.start ?? beat.at, NaN);
+    return {
+      time,
+      index: Number(beat.index ?? beat.beat_index ?? index),
+      bpm: Number(beat.bpm ?? timeline.bpm ?? 0) || null,
+      confidence: clamp(Number(beat.confidence ?? beat.probability ?? 1), 0, 1),
+    };
+  }).filter((beat) => Number.isFinite(beat.time)).sort((left, right) => left.time - right.time);
+
+  const downbeats = rawDownbeats.map((downbeat) => {
+    const time = typeof downbeat === "number" ? downbeat : numericTime(downbeat.time ?? downbeat.start ?? downbeat.at, NaN);
+    const beatIndex = beats.findIndex((beat) => Math.abs(beat.time - time) <= 0.04);
+    return {
+      time,
+      beat_index: Number(downbeat.beat_index ?? downbeat.index ?? (beatIndex >= 0 ? beatIndex : 0)),
+      confidence: clamp(Number(downbeat.confidence ?? downbeat.probability ?? 1), 0, 1),
+    };
+  }).filter((downbeat) => Number.isFinite(downbeat.time)).sort((left, right) => left.time - right.time);
+
+  const segments = rawSegments.length
+    ? rawSegments.map((segment, index) => normalizeMusicalSegment(segment, index, rawSegments, rawLabels))
+    : rawBoundaries.map((start, index) => ({
+      start: numericTime(start, 0),
+      end: numericTime(rawBoundaries[index + 1], numericTime(timeline.duration, numericTime(start, 0))),
+      label: rawLabels[index]?.label ?? rawLabels[index] ?? `segment_${index + 1}`,
+      confidence: 1,
+      sample_category: rawLabels[index]?.sample_category ?? null,
+      scene_category: rawLabels[index]?.scene_category ?? null,
+      energy_summary: rawLabels[index]?.energy_summary ?? null,
+    }));
+
+  const onsets = rawOnsets.map((onset) => {
+    const time = typeof onset === "number" ? onset : numericTime(onset.time ?? onset.start ?? onset.at, NaN);
+    return {
+      time,
+      strength: clamp(Number(onset.strength ?? onset.value ?? onset.activation ?? onset.energy ?? 1), 0, 1),
+      band: onset.band ?? onset.component ?? onset.lane ?? "full",
+      source: onset.source ?? "all_in_one",
+      confidence: clamp(Number(onset.confidence ?? onset.probability ?? 1), 0, 1),
+    };
+  }).filter((onset) => Number.isFinite(onset.time)).sort((left, right) => left.time - right.time);
+
+  const events = normalizeMusicalEvents({ rawEvents, beats, downbeats, segments, onsets });
+  const lastTime = Math.max(
+    numericTime(timeline.duration, 0),
+    ...events.map((event) => event.time),
+    ...segments.map((segment) => segment.end),
+    ...beats.map((beat) => beat.time),
+    ...onsets.map((onset) => onset.time)
+  );
+  const normalized = {
+    ...createEmptyMusicalTimeline(source, lastTime),
+    segments: segments.filter((segment) => Number.isFinite(segment.start)).sort((left, right) => left.start - right.start),
+    beats,
+    downbeats,
+    onsets,
+    events,
+  };
+  normalized.lightFrames = buildLightFramesFromMusicalTimeline(normalized);
+  normalized.cursor = musicalTimelineCursorAt(normalized, 0);
+  logEvent(
+    `[all-in-one] loaded beats=${normalized.beats.length} downbeats=${normalized.downbeats.length} `
+    + `segments=${normalized.segments.length} onsets=${normalized.onsets.length} events=${normalized.events.length} `
+    + `duration=${roundNumber(normalized.duration, 3)}`
+  );
+  if (missingFields.length) logEvent(`[all-in-one] missing fields: ${missingFields.join(", ")}`);
+  return normalized;
+}
+
+function normalizeMusicalSegment(segment, index, allSegments, labels) {
+  const start = numericTime(segment.start ?? segment.time ?? segment.at, 0);
+  const nextStart = allSegments[index + 1]?.start ?? allSegments[index + 1]?.time ?? allSegments[index + 1]?.at;
+  return {
+    start,
+    end: numericTime(segment.end ?? segment.stop ?? nextStart, start),
+    label: segment.label ?? segment.name ?? labels[index]?.label ?? labels[index] ?? `segment_${index + 1}`,
+    confidence: clamp(Number(segment.confidence ?? segment.probability ?? 1), 0, 1),
+    sample_category: segment.sample_category ?? segment.category ?? null,
+    scene_category: segment.scene_category ?? segment.scene ?? null,
+    energy_summary: segment.energy_summary ?? segment.energy ?? null,
+  };
+}
+
+function normalizeMusicalEvents({ rawEvents, beats, downbeats, segments, onsets }) {
+  const events = rawEvents.map((event) => ({
+    time: numericTime(event.time ?? event.start ?? event.at, NaN),
+    type: event.type ?? "light_change",
+    source: event.source ?? "timeline_json",
+    confidence: clamp(Number(event.confidence ?? event.probability ?? 1), 0, 1),
+    metadata: event.metadata ?? event,
+  })).filter((event) => Number.isFinite(event.time));
+  segments.forEach((segment, index) => {
+    events.push({ time: segment.start, type: "segment_start", source: "segment", confidence: segment.confidence, metadata: { index, segment } });
+    if (Number.isFinite(segment.end) && segment.end > segment.start) {
+      events.push({ time: segment.end, type: "segment_end", source: "segment", confidence: segment.confidence, metadata: { index, segment } });
+    }
+  });
+  beats.forEach((beat) => events.push({ time: beat.time, type: "beat", source: "beat", confidence: beat.confidence, metadata: { beat } }));
+  downbeats.forEach((downbeat) => events.push({ time: downbeat.time, type: "downbeat", source: "downbeat", confidence: downbeat.confidence, metadata: { downbeat } }));
+  onsets.forEach((onset) => events.push({ time: onset.time, type: "onset", source: onset.source, confidence: onset.confidence, metadata: { onset } }));
+  return events.sort((left, right) => left.time - right.time || eventTypePriority(left.type) - eventTypePriority(right.type));
+}
+
+function eventTypePriority(type) {
+  return {
+    segment_start: 0,
+    downbeat: 1,
+    beat: 2,
+    onset: 3,
+    manual_cut: 4,
+    light_change: 5,
+    segment_end: 6,
+  }[type] ?? 9;
+}
+
+function buildLightFramesFromMusicalTimeline(timeline) {
+  const boundaries = new Map();
+  const addBoundary = (time, sourceEvent) => {
+    const safeTime = roundNumber(clamp(Number(time), 0, Math.max(timeline.duration, 0)), 4);
+    if (!Number.isFinite(safeTime)) return;
+    const key = String(safeTime);
+    const existing = boundaries.get(key) ?? { time: safeTime, sourceEvents: [] };
+    if (sourceEvent) existing.sourceEvents.push(sourceEvent);
+    boundaries.set(key, existing);
+  };
+  addBoundary(0, { type: "start", source: timeline.source });
+  addBoundary(timeline.duration, { type: "end", source: timeline.source });
+  timeline.segments.forEach((segment) => {
+    addBoundary(segment.start, { type: "segment_start", segment });
+    addBoundary(segment.end, { type: "segment_end", segment });
+  });
+  timeline.beats.forEach((beat) => addBoundary(beat.time, { type: "beat", beat }));
+  timeline.downbeats.forEach((downbeat) => addBoundary(downbeat.time, { type: "downbeat", downbeat }));
+  timeline.onsets
+    .filter((onset) => onset.strength >= 0.58 || onset.confidence >= 0.75)
+    .forEach((onset) => addBoundary(onset.time, { type: "onset", onset }));
+  timeline.events
+    .filter((event) => ["manual_cut", "light_change", "segment_start", "segment_end", "downbeat"].includes(event.type))
+    .forEach((event) => addBoundary(event.time, event));
+
+  const ordered = [...boundaries.values()].sort((left, right) => left.time - right.time);
+  const frames = [];
+  for (let index = 0; index < ordered.length - 1; index += 1) {
+    const start = ordered[index].time;
+    const end = ordered[index + 1].time;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    const segment = segmentAtMusicalTime(timeline, start);
+    const sourceEvent = preferredSourceEvent(ordered[index].sourceEvents);
+    const metadata = sourceEvent?.metadata ?? {};
+    frames.push({
+      id: `lf_${String(frames.length + 1).padStart(4, "0")}`,
+      time: start,
+      end_time: end,
+      editable: true,
+      source_event: sourceEvent?.type ?? "musical_boundary",
+      sample_category: metadata.sample_category ?? segment?.sample_category ?? null,
+      scene_category: metadata.scene_category ?? metadata.scene ?? segment?.scene_category ?? null,
+      timing_intent: metadata.timing_intent ?? metadata.lighting?.timing_intent ?? null,
+      lighting_intent: metadata.lighting_intent ?? metadata.designer_logic?.lighting_intent ?? metadata.intent ?? null,
+      light_snapshot: Array.isArray(metadata.light_snapshot) ? deepCopyLightSnapshot(metadata.light_snapshot) : null,
+    });
+  }
+  return frames;
+}
+
+function preferredSourceEvent(sourceEvents) {
+  if (!Array.isArray(sourceEvents) || !sourceEvents.length) return null;
+  return [...sourceEvents].sort((left, right) => eventTypePriority(left.type) - eventTypePriority(right.type))[0];
+}
+
+function segmentAtMusicalTime(timeline, time) {
+  return timeline.segments.find((segment) => time >= segment.start && time < segment.end) ?? null;
+}
+
+function musicalTimelineCursorAt(timeline, time) {
+  const safeTime = clamp(Number(time ?? 0), 0, Math.max(timeline.duration, 0));
+  return {
+    time: safeTime,
+    frameIndex: timeline.lightFrames.findIndex((frame) => safeTime >= frame.time && safeTime < frame.end_time),
+    beatIndex: lastIndexAtOrBefore(timeline.beats, safeTime, "time"),
+    segmentIndex: timeline.segments.findIndex((segment) => safeTime >= segment.start && safeTime < segment.end),
+  };
+}
+
+function lastIndexAtOrBefore(items, time, property) {
+  let found = -1;
+  items.forEach((item, index) => {
+    if (Number(item[property] ?? 0) <= time) found = index;
+  });
+  return found;
+}
+
 async function loadTimelineFile(file) {
   stopDeviceInput();
   stopPlayback({ resetPosition: true, keepLights: true });
@@ -434,12 +688,26 @@ async function loadTimelineFile(file) {
   const text = await file.text();
   const parsed = JSON.parse(text);
   const timeline = parsed.timeline ?? parsed;
+  musicalTimeline = normalizeAllInOneTimeline({ ...timeline, source: file.name });
   const events = Array.isArray(timeline.events) ? timeline.events : [];
-  if (!events.length) {
+  if (!events.length && !musicalTimeline.events.length) {
     throw new Error("Timeline JSON senza eventi");
   }
 
-  timelineEvents = events
+  const playbackEvents = events.length
+    ? events
+    : musicalTimeline.events
+      .filter((event) => ["segment_start", "downbeat", "onset", "light_change"].includes(event.type))
+      .map((event) => ({
+        time: event.time,
+        scene: event.metadata?.segment?.label ?? event.type,
+        sample_category: event.metadata?.segment?.sample_category ?? event.metadata?.sample_category ?? null,
+        category: event.metadata?.segment?.sample_category ?? null,
+        intent: event.metadata?.lighting_intent ?? event.type,
+        metadata: event.metadata ?? {},
+      }));
+
+  timelineEvents = playbackEvents
     .map((event) => ({
       ...event,
       time: Number(event.time ?? event.at ?? 0),
@@ -456,7 +724,10 @@ async function loadTimelineFile(file) {
 
   const lastEventTime = timelineEvents[timelineEvents.length - 1]?.time ?? 0;
   const lastRhythmTime = timelineRhythmEvents[timelineRhythmEvents.length - 1]?.time ?? 0;
-  timelineDuration = Math.max(Number(timeline.duration ?? 0), lastEventTime + 8, lastRhythmTime + 2);
+  timelineDuration = Math.max(Number(timeline.duration ?? 0), musicalTimeline.duration, lastEventTime + 8, lastRhythmTime + 2);
+  musicalTimeline.duration = Math.max(musicalTimeline.duration, timelineDuration);
+  musicalTimeline.lightFrames = buildLightFramesFromMusicalTimeline(musicalTimeline);
+  musicalTimeline.cursor = musicalTimelineCursorAt(musicalTimeline, 0);
   loadedTimelineName = file.name;
   timelinePausedAt = 0;
   timelineNextIndex = 0;
@@ -473,7 +744,7 @@ async function loadTimelineFile(file) {
   elements.seekSlider.disabled = false;
   setState("Timeline ready");
   updateMeter(0);
-  drawTimelineOverview();
+  renderMusicDissectorDashboard(musicalTimeline);
   updatePlayerTime();
   logEvent(`timeline loaded ${file.name}`);
   if (!timelineRhythmEvents.length) {
@@ -1334,9 +1605,9 @@ function phaseStateForLight(state) {
   };
 }
 
-function phaseButtonVisualState(state, phaseState, baseColor, manualCasual, lightOff) {
+function phaseButtonVisualState(state, phaseState, baseColor, _manualCasual, lightOff) {
   const off = lightOff || phaseState.off || isLightOffState(state);
-  const offButton = { selected: false, off: true, casual: false, color: "rgb(0, 0, 0)" };
+  const offButton = { selected: false, off: true, color: "rgb(0, 0, 0)" };
   if (off) {
     return { first: offButton, second: offButton };
   }
@@ -1344,14 +1615,12 @@ function phaseButtonVisualState(state, phaseState, baseColor, manualCasual, ligh
     first: {
       selected: phaseState.firstOn,
       off: !phaseState.firstOn,
-      casual: phaseState.firstOn && manualCasual,
-      color: phaseState.firstOn && !manualCasual ? baseColor : "rgb(0, 0, 0)",
+      color: phaseState.firstOn ? baseColor : "rgb(0, 0, 0)",
     },
     second: {
       selected: phaseState.secondOn,
       off: !phaseState.secondOn,
-      casual: phaseState.secondOn && manualCasual,
-      color: phaseState.secondOn && !manualCasual ? baseColor : "rgb(0, 0, 0)",
+      color: phaseState.secondOn ? baseColor : "rgb(0, 0, 0)",
     },
   };
 }
@@ -1360,7 +1629,7 @@ function applyPhaseButtonVisual(button, visualState) {
   if (!button) return;
   button.classList.toggle("is-selected", visualState.selected);
   button.classList.toggle("is-off", visualState.off);
-  button.classList.toggle("is-casual", visualState.casual);
+  button.style.setProperty("--phase-button-color", visualState.color);
 }
 
 function forceLightVisualOff(light) {
@@ -1389,8 +1658,9 @@ function clearPhaseVisualResidues() {
     light.style.removeProperty("--phase-lens-fill");
     light.style.removeProperty("--flat-phase-fill");
     light.querySelectorAll(".phase-button").forEach((button) => {
-      button.classList.remove("is-selected", "is-casual");
+      button.classList.remove("is-selected");
       button.classList.add("is-off");
+      button.style.setProperty("--phase-button-color", "rgb(0, 0, 0)");
     });
   });
 }
@@ -1475,7 +1745,8 @@ function logLightOff(index, reason) {
 function renderLights() {
   const playingReview = Boolean(reviewAnimationFrame);
   const liveListening = isPlaying && (inputMode === "mic_device" || inputMode === "system_audio");
-  const phaseAnimatedMode = playingReview || liveListening;
+  const timelinePlaying = isPlaying && inputMode === "timeline";
+  const phaseAnimatedMode = playingReview || liveListening || timelinePlaying;
   const editStaticMode = trainingReviewModeActive() && !phaseAnimatedMode;
   const reviewTime = phaseAnimatedMode ? currentPlaybackTime() : trainingCapture.reviewTime ?? currentPlaybackTime();
   const beatPhase = phaseAnimatedMode ? currentBeatPhaseAt(reviewTime).phase : null;
@@ -1501,13 +1772,11 @@ function renderLights() {
     const visible = effectiveIntensity > 0.04;
     const flatColor = `rgb(${r}, ${g}, ${b})`;
     const phaseButtonState = phaseButtonVisualState(state, phaseState, flatColor, manualCasual, lightOff);
+    const leftPhaseButton = light.querySelector('[data-phase="first"]');
+    const rightPhaseButton = light.querySelector('[data-phase="second"]');
     if (phaseState.off || lightOff || timingIntent === "blackout" || effectiveIntensity <= 0) {
-      if (editStaticMode) {
-        const leftPhaseButton = light.querySelector('[data-phase="first"]');
-        const rightPhaseButton = light.querySelector('[data-phase="second"]');
-        applyPhaseButtonVisual(leftPhaseButton, phaseButtonState.first);
-        applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
-      }
+      applyPhaseButtonVisual(leftPhaseButton, phaseButtonState.first);
+      applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
       forceLightVisualOff(light);
       if (playingReview) reviewPerfDomWrites += 1;
       return;
@@ -1534,8 +1803,6 @@ function renderLights() {
         ? `${phaseOffMask}, url('assets/casual-color.jpg') center / cover`
         : `linear-gradient(90deg, ${phaseState.firstOn ? flatColor : phaseOff} 0 50%, ${phaseState.firstOn ? flatColor : phaseOff} 50%, ${phaseState.secondOn ? flatColor : phaseOff} 50%, ${phaseState.secondOn ? flatColor : phaseOff} 100%)`
       : flatBulbFill;
-    const leftPhaseButton = editStaticMode ? light.querySelector('[data-phase="first"]') : null;
-    const rightPhaseButton = editStaticMode ? light.querySelector('[data-phase="second"]') : null;
 
     light.style.background = visible
       ? manualCasual
@@ -1560,11 +1827,6 @@ function renderLights() {
       const phaseColor = manualCasual ? "transparent" : flatColor;
       light.style.setProperty("--phase-left", phaseButtonState.first.selected ? phaseColor : phaseOff);
       light.style.setProperty("--phase-right", phaseButtonState.second.selected ? phaseColor : phaseOff);
-      if (phaseButtonState.first.selected || phaseButtonState.second.selected) {
-        light.style.setProperty("--phase-button-color", flatColor);
-      } else {
-        light.style.removeProperty("--phase-button-color");
-      }
     } else {
       light.style.removeProperty("--phase-left");
       light.style.removeProperty("--phase-right");
@@ -1585,10 +1847,8 @@ function renderLights() {
     light.classList.toggle("phase-split", phaseSplit);
     light.classList.toggle("blackout", lightOff);
     light.classList.toggle("flat-visible", Boolean(flatBulbFill));
-    if (editStaticMode) {
-      applyPhaseButtonVisual(leftPhaseButton, phaseButtonState.first);
-      applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
-    }
+    applyPhaseButtonVisual(leftPhaseButton, phaseButtonState.first);
+    applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
     if (playingReview) reviewPerfDomWrites += 1;
   });
   updateBrainSemantics(undefined, undefined);
@@ -2103,6 +2363,108 @@ function drawTimelineOverview() {
   });
 }
 
+function renderMusicDissectorDashboard(timeline = musicalTimeline) {
+  const canvas = elements.trackOverview;
+  const context = canvas.getContext("2d");
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(260, Math.round(rect.width * ratio));
+  const height = Math.max(120, Math.round(rect.height * ratio));
+  canvas.width = width;
+  canvas.height = height;
+  context.fillStyle = "#0d1011";
+  context.fillRect(0, 0, width, height);
+  drawOverviewGrid(context, width, height);
+  renderTimelineSegments(context, timeline, width, height, ratio);
+  renderTimelineBeats(context, timeline, width, height, ratio);
+  renderTimelineDownbeats(context, timeline, width, height, ratio);
+  renderTimelineOnsets(context, timeline, width, height, ratio);
+  renderTimelineLightFrames(context, timeline, width, height, ratio);
+  renderTimelineCursor(context, timeline, width, height, ratio);
+}
+
+function timelineX(time, timeline, width) {
+  return clamp(Number(time ?? 0) / Math.max(timeline.duration, 0.001), 0, 1) * width;
+}
+
+function renderTimelineSegments(context, timeline, width, height, ratio) {
+  timeline.segments.forEach((segment, index) => {
+    const x = timelineX(segment.start, timeline, width);
+    const endX = timelineX(segment.end, timeline, width);
+    const category = segment.sample_category ?? segment.label;
+    const [r, g, b] = colors[colorIndexForTimelineCategory(category)].value;
+    context.fillStyle = `rgba(${r}, ${g}, ${b}, ${index % 2 === 0 ? 0.12 : 0.18})`;
+    context.fillRect(x, 0, Math.max(1, endX - x), height * 0.28);
+    context.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.48)`;
+    context.lineWidth = Math.max(1, ratio);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+  });
+}
+
+function renderTimelineBeats(context, timeline, width, height, ratio) {
+  context.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  context.lineWidth = Math.max(1, ratio);
+  timeline.beats.forEach((beat) => {
+    const x = timelineX(beat.time, timeline, width);
+    context.beginPath();
+    context.moveTo(x, height * 0.28);
+    context.lineTo(x, height);
+    context.stroke();
+  });
+}
+
+function renderTimelineDownbeats(context, timeline, width, height, ratio) {
+  context.strokeStyle = "rgba(255, 196, 87, 0.78)";
+  context.lineWidth = Math.max(1, 1.6 * ratio);
+  timeline.downbeats.forEach((downbeat) => {
+    const x = timelineX(downbeat.time, timeline, width);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+  });
+}
+
+function renderTimelineOnsets(context, timeline, width, height, ratio) {
+  timeline.onsets.forEach((onset) => {
+    const x = timelineX(onset.time, timeline, width);
+    const markerHeight = Math.max(8 * ratio, onset.strength * height * 0.42);
+    context.fillStyle = `rgba(245, 247, 248, ${0.18 + onset.strength * 0.46})`;
+    context.fillRect(x - ratio, height - markerHeight, Math.max(1, 2 * ratio), markerHeight);
+  });
+}
+
+function renderTimelineLightFrames(context, timeline, width, height, ratio) {
+  context.strokeStyle = "rgba(79, 195, 177, 0.72)";
+  context.lineWidth = Math.max(1, 1.4 * ratio);
+  timeline.lightFrames.forEach((frame, index) => {
+    const x = timelineX(frame.time, timeline, width);
+    const selected = index === timeline.cursor.frameIndex;
+    context.strokeStyle = selected ? "rgba(79, 195, 177, 1)" : "rgba(79, 195, 177, 0.58)";
+    context.beginPath();
+    context.moveTo(x, height * 0.12);
+    context.lineTo(x, height);
+    context.stroke();
+    if (selected) {
+      context.fillStyle = "rgba(79, 195, 177, 0.90)";
+      context.fillRect(x - 3 * ratio, height * 0.1, 6 * ratio, 6 * ratio);
+    }
+  });
+}
+
+function renderTimelineCursor(context, timeline, width, height, ratio) {
+  const x = timelineX(timeline.cursor.time, timeline, width);
+  context.strokeStyle = "rgba(255, 255, 255, 0.96)";
+  context.lineWidth = Math.max(1, 1.3 * ratio);
+  context.beginPath();
+  context.moveTo(x, 0);
+  context.lineTo(x, height);
+  context.stroke();
+}
+
 function colorIndexForTimelineCategory(category) {
   if (category === "high_energy_drop") return 4;
   if (category === "buildup") return 1;
@@ -2125,17 +2487,8 @@ function drawOverviewGrid(context, width, height) {
 
 function drawOverviewPlayhead(current, duration) {
   if (inputMode === "timeline") {
-    drawTimelineOverview();
-    const canvas = elements.trackOverview;
-    const context = canvas.getContext("2d");
-    const progress = clamp(current / Math.max(duration, 0.001), 0, 1);
-    const x = Math.round(progress * canvas.width);
-    context.strokeStyle = "rgba(255, 255, 255, 0.92)";
-    context.lineWidth = Math.max(1, window.devicePixelRatio || 1);
-    context.beginPath();
-    context.moveTo(x, 0);
-    context.lineTo(x, canvas.height);
-    context.stroke();
+    musicalTimeline.cursor = musicalTimelineCursorAt(musicalTimeline, current);
+    renderMusicDissectorDashboard(musicalTimeline);
     return;
   }
   if (!audioBuffer || inputMode !== "file") return;
@@ -2225,6 +2578,14 @@ function trainingReviewCueTimes() {
     .sort((left, right) => left - right);
 }
 
+function trainingReviewFrameTimes() {
+  if (!trainingCapture.frames.length) return [];
+  return trainingCapture.frames
+    .map((frame) => roundNumber(Number(frame.time ?? 0), 4))
+    .filter((time) => Number.isFinite(time))
+    .sort((left, right) => left - right);
+}
+
 function trainingReviewAutomaticCueTimes() {
   if (!trainingCapture.frames.length) return [];
   const times = new Set([0, roundNumber(trainingCapture.duration, 4)]);
@@ -2246,11 +2607,14 @@ function isSuppressedCueTime(time) {
 }
 
 function snapTrainingReviewTime(rawTime) {
-  const times = trainingReviewCueTimes();
+  const times = [...trainingReviewCueTimes(), ...trainingReviewFrameTimes()];
   if (!times.length) return clamp(rawTime, 0, trainingCapture.duration);
-  return times.reduce((nearest, time) => (
-    Math.abs(time - rawTime) < Math.abs(nearest - rawTime) ? time : nearest
+  const nearest = times.reduce((closest, time) => (
+    Math.abs(time - rawTime) < Math.abs(closest - rawTime) ? time : closest
   ), times[0]);
+  const threshold = Math.max(0.08, trainingReviewHitThresholdSeconds(18));
+  if (Math.abs(nearest - rawTime) <= threshold) return nearest;
+  return clamp(rawTime, 0, trainingCapture.duration);
 }
 
 function phaseFromPulse(time, pulseTime, interval, source) {
@@ -2554,7 +2918,25 @@ function followSpectrumPlayhead(currentTime, duration) {
 
 function drawTrainingCueMarkers(context, width, height, ratio, duration, currentTime) {
   if (!trainingReviewModeActive()) return;
-  trainingReviewCueTimes().forEach((time) => {
+  const frameTimes = trainingReviewFrameTimes();
+  const currentThreshold = trainingReviewHitThresholdSeconds(12);
+  frameTimes.forEach((time) => {
+    const x = clamp(time / Math.max(duration, 0.001), 0, 1) * width;
+    const selected = Number.isFinite(currentTime) && Math.abs(time - currentTime) <= currentThreshold;
+    context.strokeStyle = selected ? "rgba(79, 195, 177, 0.95)" : "rgba(79, 195, 177, 0.30)";
+    context.lineWidth = selected ? Math.max(1, 1.8 * ratio) : Math.max(1, ratio);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+    if (selected) {
+      context.fillStyle = "rgba(79, 195, 177, 0.90)";
+      context.beginPath();
+      context.arc(x, height - 7 * ratio, Math.max(3, 3.4 * ratio), 0, Math.PI * 2);
+      context.fill();
+    }
+  });
+  trainingReviewAutomaticCueTimes().filter((time) => !isSuppressedCueTime(time)).forEach((time) => {
     const x = clamp(time / Math.max(duration, 0.001), 0, 1) * width;
     context.strokeStyle = "rgba(255, 255, 255, 0.16)";
     context.lineWidth = Math.max(1, ratio);
@@ -2565,8 +2947,9 @@ function drawTrainingCueMarkers(context, width, height, ratio, duration, current
   });
   trainingCapture.cues.forEach((cue) => {
     const x = clamp(cue.time / Math.max(duration, 0.001), 0, 1) * width;
-    context.strokeStyle = "rgba(255, 196, 87, 0.86)";
-    context.lineWidth = Math.max(1, 1.5 * ratio);
+    const selected = cue.id === selectedTrainingCueId || (Number.isFinite(currentTime) && Math.abs(cue.time - currentTime) <= currentThreshold);
+    context.strokeStyle = selected ? "rgba(255, 196, 87, 1)" : "rgba(255, 196, 87, 0.86)";
+    context.lineWidth = selected ? Math.max(1, 2.2 * ratio) : Math.max(1, 1.5 * ratio);
     context.setLineDash([4 * ratio, 4 * ratio]);
     context.beginPath();
     context.moveTo(x, 0);
@@ -2595,10 +2978,15 @@ function cueTimeFromCanvasEvent(event) {
   return progress * Math.max(trainingCapture.duration, 0.001);
 }
 
-function cueHitThresholdSeconds() {
+function trainingReviewHitThresholdSeconds(pixelRadius = 14) {
   const rect = elements.liveSpectrum.getBoundingClientRect();
-  const secondsPerPixel = trainingCapture.duration / Math.max(rect.width, 1);
-  return Math.max(0.08, secondsPerPixel * 14);
+  const measuredWidth = rect.width || elements.liveSpectrum.width || 980;
+  const secondsPerPixel = trainingCapture.duration / Math.max(measuredWidth, 1);
+  return Math.max(0.08, secondsPerPixel * pixelRadius);
+}
+
+function cueHitThresholdSeconds() {
+  return trainingReviewHitThresholdSeconds(16);
 }
 
 function nearestCueHit(time) {
@@ -2823,6 +3211,74 @@ async function seekToSliderValue(value) {
   }
 }
 
+function seekToTimelineFrame(index) {
+  const frames = musicalTimeline.lightFrames ?? [];
+  if (!frames.length) return false;
+  const safeIndex = clamp(Math.round(index), 0, frames.length - 1);
+  const frame = frames[safeIndex];
+  musicalTimeline.cursor = musicalTimelineCursorAt(musicalTimeline, frame.time);
+  const duration = Math.max(musicalTimeline.duration || getAudioDuration() || trainingCapture.duration, 0.001);
+  seekToSliderValue((frame.time / duration) * 1000).catch((error) => {
+    setState("Frame seek error");
+    logEvent(error.message);
+  });
+  logEvent(`[music-nav] frame=${safeIndex + 1}/${frames.length} time=${roundNumber(frame.time, 4)} source=${frame.source_event}`);
+  return true;
+}
+
+function nextTimelineFrame() {
+  const frames = musicalTimeline.lightFrames ?? [];
+  if (!frames.length) return false;
+  const cursor = musicalTimelineCursorAt(musicalTimeline, currentPlaybackTime());
+  return seekToTimelineFrame(Math.min(frames.length - 1, cursor.frameIndex + 1));
+}
+
+function previousTimelineFrame() {
+  const frames = musicalTimeline.lightFrames ?? [];
+  if (!frames.length) return false;
+  const cursor = musicalTimelineCursorAt(musicalTimeline, currentPlaybackTime());
+  const index = cursor.frameIndex <= 0 ? 0 : cursor.frameIndex - 1;
+  return seekToTimelineFrame(index);
+}
+
+function seekToNearestMusicalEvent(time) {
+  const events = musicalTimeline.events ?? [];
+  if (!events.length) return false;
+  const nearest = events.reduce((closest, event) => (
+    Math.abs(event.time - time) < Math.abs(closest.time - time) ? event : closest
+  ), events[0]);
+  const nearestFrameIndex = nearestTimelineFrameIndexAt(nearest.time);
+  return seekToTimelineFrame(nearestFrameIndex);
+}
+
+function nearestTimelineFrameIndexAt(time) {
+  const frames = musicalTimeline.lightFrames ?? [];
+  if (!frames.length) return -1;
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  frames.forEach((frame, index) => {
+    const distance = Math.abs(Number(frame.time ?? 0) - time);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  });
+  return nearestIndex;
+}
+
+function nextBeatOrDownbeatFrame(direction = 1) {
+  const markers = [
+    ...(musicalTimeline.beats ?? []).map((beat) => ({ time: beat.time, type: "beat" })),
+    ...(musicalTimeline.downbeats ?? []).map((downbeat) => ({ time: downbeat.time, type: "downbeat" })),
+  ].sort((left, right) => left.time - right.time || eventTypePriority(left.type) - eventTypePriority(right.type));
+  if (!markers.length) return false;
+  const current = currentPlaybackTime();
+  const marker = direction > 0
+    ? markers.find((item) => item.time > current + 0.01) ?? markers.at(-1)
+    : [...markers].reverse().find((item) => item.time < current - 0.01) ?? markers[0];
+  return seekToTimelineFrame(nearestTimelineFrameIndexAt(marker.time));
+}
+
 function findNextTimelineIndex(time) {
   const index = timelineEvents.findIndex((event) => event.time >= time);
   return index === -1 ? timelineEvents.length : index;
@@ -2962,6 +3418,121 @@ function auditFrameAccess(reason = "manual") {
   );
 }
 
+function snapshotSignature(snapshot) {
+  if (!Array.isArray(snapshot)) return "none";
+  return JSON.stringify(snapshot.map((state) => ({
+    enabled: state.enabled !== false,
+    intensity: roundNumber(Number(state.intensity ?? 0), 3),
+    colorIndex: state.colorIndex ?? null,
+    colorMode: state.colorMode ?? null,
+    blackout: Boolean(state.blackout),
+    phaseMode: state.phaseMode ?? null,
+  })));
+}
+
+function nearestLightFrameDistanceMs(time) {
+  const lightFrames = musicalTimeline.lightFrames ?? [];
+  if (!lightFrames.length) return null;
+  const nearest = lightFrames.reduce((distance, frame) => Math.min(distance, Math.abs(Number(frame.time ?? 0) - time)), Infinity);
+  return Number.isFinite(nearest) ? Math.round(nearest * 1000) : null;
+}
+
+function auditHiddenLightChanges(reason) {
+  const lightFrames = musicalTimeline.lightFrames ?? [];
+  const frames = trainingCapture.frames ?? [];
+  const accessibleTimes = lightFrames.map((frame) => Number(frame.time ?? 0)).filter(Number.isFinite);
+  const maxAllowedGap = Math.max(0.12, musicalClock.interval ? musicalClock.interval * 0.5 : 0.25);
+  let hiddenChanges = 0;
+  let maxGapMs = 0;
+  let previousSignature = null;
+
+  frames.forEach((frame) => {
+    const time = Number(frame.time ?? 0);
+    const signature = snapshotSignature(frameSnapshot(frame) ?? frame.light_snapshot);
+    if (previousSignature !== null && signature !== previousSignature) {
+      const nearest = accessibleTimes.length
+        ? accessibleTimes.reduce((distance, frameTime) => Math.min(distance, Math.abs(frameTime - time)), Infinity)
+        : Infinity;
+      maxGapMs = Math.max(maxGapMs, Number.isFinite(nearest) ? Math.round(nearest * 1000) : -1);
+      if (!Number.isFinite(nearest) || nearest > maxAllowedGap) {
+        hiddenChanges += 1;
+        logEvent(`[bug] hidden_light_change time=${roundNumber(time, 4)} light=all previous=${previousSignature} next=${signature}`);
+      }
+    }
+    previousSignature = signature;
+  });
+
+  const currentGapMs = nearestLightFrameDistanceMs(currentPlaybackTime());
+  if (currentGapMs !== null) maxGapMs = Math.max(maxGapMs, currentGapMs);
+  logEvent(
+    `[hidden-light-audit] reason=${reason} frames=${frames.length} lightFrames=${lightFrames.length} `
+    + `hiddenChanges=${hiddenChanges} maxGapMs=${maxGapMs} ok=${hiddenChanges === 0}`
+  );
+  return hiddenChanges === 0;
+}
+
+function syncMusicalTimelineFromTrainingCapture(reason = "training_capture") {
+  if (!trainingCapture.frames.length) return musicalTimeline;
+  const duration = Math.max(trainingCapture.duration, trainingCapture.frames.at(-1)?.time ?? 0);
+  const timeline = createEmptyMusicalTimeline(trainingCapture.source ?? reason, duration);
+  timeline.onsets = trainingCapture.frames.map((frame, index) => ({
+    time: roundNumber(Number(frame.time ?? 0), 4),
+    strength: clamp(Number(frame.spectral_flux ?? frame.energy_delta ?? frame.energy ?? 0), 0, 1),
+    band: frame.dominant_component ?? frame.clock_source ?? "full",
+    source: "training_frame",
+    confidence: 0.7,
+    frame_index: index,
+  }));
+  timeline.beats = trainingCapture.frames
+    .filter((frame) => Boolean(frame.rhythm_split?.base_interval_seconds))
+    .map((frame, index) => ({
+      time: roundNumber(Number(frame.time ?? 0), 4),
+      index,
+      bpm: frame.rhythm_split?.base_interval_seconds ? roundNumber(60 / frame.rhythm_split.base_interval_seconds, 2) : null,
+      confidence: 0.55,
+    }));
+  timeline.segments = trainingCapture.frames.map((frame, index) => {
+    const next = trainingCapture.frames[index + 1];
+    return {
+      start: roundNumber(Number(frame.time ?? 0), 4),
+      end: roundNumber(Number(next?.time ?? duration), 4),
+      label: frame.scene_category ?? frame.sample_category ?? `frame_${index + 1}`,
+      confidence: 0.65,
+      sample_category: frame.sample_category ?? null,
+      scene_category: frame.scene_category ?? null,
+      energy_summary: {
+        energy: frame.energy ?? null,
+        trend: frame.energy_trend ?? null,
+      },
+    };
+  }).filter((segment) => segment.end > segment.start);
+  timeline.events = normalizeMusicalEvents({
+    rawEvents: trainingCapture.frames.map((frame, index) => ({
+      time: frame.time,
+      type: "light_change",
+      source: "training_frame",
+      confidence: 0.8,
+      metadata: {
+        frame_index: index,
+        sample_category: frame.sample_category,
+        scene_category: frame.scene_category,
+        timing_intent: frame.timing_intent,
+        lighting_intent: frame.lighting_intent,
+        light_snapshot: frameSnapshot(frame) ?? frame.light_snapshot,
+      },
+    })),
+    beats: timeline.beats,
+    downbeats: timeline.downbeats,
+    segments: timeline.segments,
+    onsets: timeline.onsets,
+  });
+  timeline.lightFrames = buildLightFramesFromMusicalTimeline(timeline);
+  timeline.cursor = musicalTimelineCursorAt(timeline, trainingCapture.reviewTime ?? 0);
+  musicalTimeline = timeline;
+  logEvent(`[all-in-one] training sync reason=${reason} frames=${trainingCapture.frames.length} lightFrames=${timeline.lightFrames.length}`);
+  return musicalTimeline;
+}
+
 function auditTrainingReview(reason) {
   if (!trainingCapture.frames.length) return;
   const now = performance.now();
@@ -2970,6 +3541,7 @@ function auditTrainingReview(reason) {
   lastTrainingAuditReason = reason;
   auditTrainingFrameIntegrity(reason);
   auditFrameAccess(reason);
+  auditHiddenLightChanges(reason);
 }
 
 function beginTrainingCapture(source) {
@@ -3014,6 +3586,7 @@ function stopTrainingCapture(reason = "stopped") {
   updateTrainingSummary();
   updateTrainingEditState();
   if (trainingCapture.frames.length) {
+    syncMusicalTimelineFromTrainingCapture(`capture_${reason}`);
     applyTrainingReviewFrame(0);
     redrawTrainingReview();
     auditTrainingReview(`capture_${reason}`);
@@ -3290,7 +3863,7 @@ function applyTrainingReviewFrame(time) {
   if (!frame) return false;
   const finalScene = frameScene(frame);
   const cue = findTrainingCueAt(trainingCapture.reviewTime);
-  if (cue) selectedTrainingCueId = cue.id;
+  selectedTrainingCueId = cue?.id ?? null;
   const { override } = getManualOverrideForTime(trainingCapture.reviewTime);
   const snapshot = override?.light_snapshot
     ?? interpolatedTrainingSnapshot(frame, nextFrame, trainingCapture.reviewTime)
@@ -3560,6 +4133,7 @@ function cycleTrainingLight(index, direction = 1) {
   if (!canEditTrainingScene()) return;
   const state = lightStates[index];
   if (!state) return;
+  const previousPhaseMode = phaseModeForState(state);
   const currentIndex = state.manualColorIndex === null || state.manualColorIndex === undefined
     ? (direction > 0 ? -1 : 0)
     : state.manualColorIndex;
@@ -3575,12 +4149,11 @@ function cycleTrainingLight(index, direction = 1) {
     state.intensity = 1;
     if (state.timingIntent === "blackout") state.timingIntent = "sustain";
     if (state.lightingIntent === "blackout") state.lightingIntent = "sustain";
+    const previousHalves = phaseHalvesForMode(previousPhaseMode);
+    state.phaseFirstHalf = previousHalves.first;
+    state.phaseSecondHalf = previousHalves.second;
+    state.phaseMode = previousPhaseMode;
   }
-  if (state.phaseFirstHalf === false && state.phaseSecondHalf === false && !trainingColors[nextIndex].blackout) {
-    state.phaseFirstHalf = true;
-    state.phaseSecondHalf = true;
-  }
-  state.phaseMode = phaseModeForState({ ...state, phaseMode: null });
   state.timingIntent = timingIntentForLightState(state);
   renderLights();
   persistCurrentTrainingFrameScene();
@@ -3628,31 +4201,37 @@ function toggleTrainingLightPhase(event) {
     if (state.timingIntent === "blackout") state.timingIntent = "sustain";
     if (state.lightingIntent === "blackout") state.lightingIntent = "sustain";
   }
+  const currentPhaseMode = phaseModeForState({ ...state, phaseMode: null });
   if (phaseButton.dataset.phase === "first") {
-    if (state.phaseFirstHalf === true && state.phaseSecondHalf === false) {
-      return;
-    }
-    if (state.phaseFirstHalf === false && state.phaseSecondHalf === true) {
+    if (currentPhaseMode === "first_half") return;
+    if (currentPhaseMode === "second_half") {
       state.phaseFirstHalf = true;
       state.phaseSecondHalf = true;
-    } else {
-      state.phaseFirstHalf = true;
-      state.phaseSecondHalf = false;
+      state.phaseMode = "full_beat";
+      state.timingIntent = "pulse_full_beat";
+      renderLights();
+      persistCurrentTrainingFrameScene();
+      return;
     }
+    state.phaseFirstHalf = true;
+    state.phaseSecondHalf = false;
+    state.phaseMode = "first_half";
   } else {
-    if (state.phaseFirstHalf === false && state.phaseSecondHalf === true) {
-      return;
-    }
-    if (state.phaseFirstHalf === true && state.phaseSecondHalf === false) {
+    if (currentPhaseMode === "second_half") return;
+    if (currentPhaseMode === "first_half") {
       state.phaseFirstHalf = true;
       state.phaseSecondHalf = true;
-    } else {
-      state.phaseFirstHalf = false;
-      state.phaseSecondHalf = true;
+      state.phaseMode = "full_beat";
+      state.timingIntent = "pulse_full_beat";
+      renderLights();
+      persistCurrentTrainingFrameScene();
+      return;
     }
+    state.phaseFirstHalf = false;
+    state.phaseSecondHalf = true;
+    state.phaseMode = "second_half";
   }
   state.intensity = state.phaseFirstHalf || state.phaseSecondHalf ? 1 : 0;
-  state.phaseMode = phaseModeForState({ ...state, phaseMode: null });
   state.timingIntent = timingIntentForLightState(state);
   renderLights();
   persistCurrentTrainingFrameScene();
@@ -3786,10 +4365,15 @@ function findTrainingFrameAt(time) {
 }
 
 function findTrainingCueAt(time) {
+  const threshold = cueHitThresholdSeconds();
   let current = null;
+  let nearestDistance = Infinity;
   for (const cue of trainingCapture.cues) {
-    if (cue.time > time) break;
-    current = cue;
+    const distance = Math.abs(cue.time - time);
+    if (distance <= threshold && distance < nearestDistance) {
+      current = cue;
+      nearestDistance = distance;
+    }
   }
   return current;
 }
@@ -4244,6 +4828,22 @@ elements.seekSlider.addEventListener("input", () => {
   });
 });
 
+document.addEventListener("keydown", (event) => {
+  const tagName = event.target?.tagName?.toLowerCase();
+  if (["input", "select", "textarea"].includes(tagName) || event.target?.isContentEditable) return;
+  if (!["ArrowRight", "ArrowLeft"].includes(event.key)) return;
+  if (!(inputMode === "timeline" || trainingReviewAvailable())) return;
+  if (!(musicalTimeline.lightFrames ?? []).length) return;
+  event.preventDefault();
+  if (event.shiftKey) {
+    nextBeatOrDownbeatFrame(event.key === "ArrowRight" ? 1 : -1);
+  } else if (event.key === "ArrowRight") {
+    nextTimelineFrame();
+  } else {
+    previousTimelineFrame();
+  }
+});
+
 elements.trackOverview.addEventListener("click", (event) => {
   const liveReview = (inputMode === "mic_device" || inputMode === "system_audio") && !isPlaying && trainingReviewModeActive();
   if ((!hasLoadedAudio() || inputMode !== "file") && inputMode !== "timeline" && !liveReview) return;
@@ -4265,6 +4865,14 @@ elements.liveSpectrum.addEventListener("click", (event) => {
 });
 
 elements.liveSpectrum.addEventListener("contextmenu", (event) => {
+  if (!enableAdvancedCueEditing) {
+    event.preventDefault();
+    if (!cueEditingDisabledLogged) {
+      logEvent("[cue-edit] disabled until All-In-One/Music Dissector dashboard rewrite");
+      cueEditingDisabledLogged = true;
+    }
+    return;
+  }
   if (!canEditTrainingScene()) return;
   event.preventDefault();
   toggleTrainingCueAt(cueTimeFromCanvasEvent(event), "contextmenu");

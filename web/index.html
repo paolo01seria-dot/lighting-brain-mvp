@@ -6,7 +6,7 @@
     <title>Lighting Brain</title>
     <link rel="icon" href="assets/casual-color.jpg" type="image/jpeg">
     <link rel="apple-touch-icon" href="assets/casual-color.jpg">
-    <link rel="stylesheet" href="styles.css?v=20260605-4">
+    <link rel="stylesheet" href="styles.css?v=20260606-10">
     <style>
       :root { color-scheme: dark; --bg: #111315; --panel: #1a1e21; --panel-2: #20262a; --line: #303940; --text: #edf2f4; --muted: #9aa7ad; --accent: #4fc3b1; --danger: #ff5c65; --radius: 8px; }
       * { box-sizing: border-box; }
@@ -110,13 +110,29 @@
       .phase-button-second { right: -8px; }
       .phase-button.is-off { border-color: rgba(8,12,13,.92); background: #020303 !important; box-shadow: none; }
       .phase-button.is-selected { border-color: rgba(8,12,13,.86); background: var(--phase-button-color, rgb(79,195,177)); box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+      .flat-bulb .light.flat-visible { border: 1px solid rgba(18,42,43,.92); background: radial-gradient(circle at 48% 46%, rgba(255,255,255,.44) 0 7%, rgba(255,255,255,.19) 8% 18%, rgba(var(--light-rgb,79,195,177),.96) 19% 55%, rgba(var(--light-rgb,79,195,177),.7) 56% 67%, rgba(3,7,8,.9) 68%), radial-gradient(circle at 50% 50%, rgba(var(--light-rgb,79,195,177),.6), transparent 69%), linear-gradient(142deg, rgba(255,255,255,.24), rgba(0,0,0,.16) 45%, rgba(0,0,0,.5)) !important; box-shadow: inset 0 2px 8px rgba(255,255,255,.22), inset 0 -9px 15px rgba(0,0,0,.38), 0 0 0 1px rgba(39,151,138,.28), 0 0 18px rgba(var(--light-rgb,79,195,177),.38) !important; filter: none; mix-blend-mode: normal; }
+      .flat-bulb .light.flat-visible.casual { background: radial-gradient(circle at 48% 46%, rgba(255,255,255,.24), transparent 17%), var(--flat-bulb-fill) !important; }
+      .flat-bulb .light.flat-visible::before { display: block; background: radial-gradient(circle at 49% 48%, transparent 0 55%, rgba(0,0,0,.24) 75%, rgba(0,0,0,.42) 100%); opacity: .65; }
+      .flat-bulb .light.flat-visible::after { display: none; }
+      .flat-bulb .light.flat-visible .bulb-depth, .flat-bulb .light.flat-visible .bulb-rim, .flat-bulb .light.flat-visible .bulb-highlight { display: block; }
+      .flat-bulb .light.flat-visible .bulb-depth { opacity: .5; }
+      .flat-bulb .light.flat-visible .bulb-rim { border-color: rgba(205,246,239,.22); opacity: .82; }
+      .flat-bulb .light.flat-visible .bulb-highlight { left: 25%; top: 21%; opacity: .9; }
+      .flat-bulb .light.flat-visible.phase-split { background: radial-gradient(circle at 48% 46%, rgba(255,255,255,.24), transparent 17%), var(--flat-phase-fill, linear-gradient(90deg, var(--phase-left, rgb(0,0,0)) 0 50%, var(--phase-right, rgb(0,0,0)) 50% 100%)) !important; box-shadow: inset 0 2px 8px rgba(255,255,255,.12), inset 0 -9px 15px rgba(0,0,0,.48), 0 0 0 1px rgba(39,151,138,.24) !important; }
+      .light.blackout, .flat-bulb .light.blackout { border-color: rgba(28,64,64,.9); background: #030607 url("assets/black-lens-reference.png") center / cover no-repeat !important; box-shadow: inset 0 2px 9px rgba(255,255,255,.1), inset 0 -12px 19px rgba(0,0,0,.62), 0 0 0 1px rgba(39,151,138,.24), 0 5px 15px rgba(0,0,0,.44) !important; }
+      .phase-button { overflow: hidden; border-color: rgba(255,255,255,.36); background: radial-gradient(circle at 36% 28%, rgba(255,255,255,.58), rgba(255,255,255,.05) 42%, rgba(79,195,177,.62) 74%), #1d2a2c; box-shadow: inset 0 1px 4px rgba(255,255,255,.18), 0 2px 8px rgba(0,0,0,.46); }
+      .phase-button::before, .phase-button::after { content: none; display: none; }
+      .phase-button.is-off { border-color: rgba(70,76,78,.42); background: radial-gradient(circle at 35% 30%, rgba(92,96,96,.42) 0%, rgba(50,54,55,.28) 24%, rgba(12,14,15,.96) 58%, rgba(0,0,0,1) 100%) !important; box-shadow: inset 0 1px 4px rgba(255,255,255,.12), inset 0 -4px 6px rgba(0,0,0,.84), 0 1px 5px rgba(0,0,0,.58); }
+      .phase-button.is-selected { border-color: rgba(255,255,255,.72); background: radial-gradient(circle at 36% 28%, rgba(255,255,255,.7), rgba(255,255,255,.08) 38%, var(--phase-button-color) 76%), var(--phase-button-color) !important; box-shadow: inset 0 1px 4px rgba(255,255,255,.22), 0 0 12px var(--phase-button-color); }
       .light-label { position: absolute; left: 50%; top: calc(100% + 5px); display: none; width: 84px; transform: translateX(-50%); color: rgba(237,242,244,.8); font-size: 9px; line-height: 1.05; text-align: center; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
       .is-training-edit .light-label { display: block; }
       .is-training-edit .light { outline: 1px solid rgba(79,195,177,.45); outline-offset: 4px; }
       .source-timeline-control, .device-control, .audio-device-summary-control { display: none !important; }
+      .qlc-web-control { display: none !important; }
       .mode-timeline .source-file-control, .is-mic-mode .source-file-panel, .is-mic-mode .source-file-control, .is-mic-mode .source-timeline-control { display: none !important; }
       .output-timeline .source-timeline-control { display: flex !important; }
       .output-timeline .source-file-control { display: none !important; }
+      .output-qlc-web .qlc-web-control { display: grid !important; }
       .is-mic-mode .device-control { display: none !important; }
       .is-mic-mode .audio-device-summary-control { display: grid !important; }
       .spectrum-shell { display: grid; grid-template-columns: 62px minmax(0, 1fr); min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: #0d1011; }
@@ -197,10 +213,47 @@
             <select id="outputTarget">
               <option value="tester">Mini tester</option>
               <option value="timeline_json">Timeline JSON</option>
+              <option value="qlc_web_bridge">QLC+ Web Bridge</option>
               <option value="qlcplus_osc">QLC+ OSC</option>
               <option value="qlcplus_midi">QLC+ MIDI</option>
               <option value="freestyler_midi">FreeStyler MIDI</option>
               <option value="artnet_intent">Art-Net intent</option>
+            </select>
+          </label>
+
+          <label class="qlc-web-control">
+            <span>QLC Profile</span>
+            <select id="qlcProfile">
+              <option value="single_rgb_test" selected>Single RGB fixture test</option>
+              <option value="full_mapping">Full fixture mapping future</option>
+            </select>
+          </label>
+
+          <label class="qlc-web-control">
+            <span>QLC Fixture Capacity</span>
+            <select id="qlcFixtureCapacity" disabled>
+              <option value="one_fixture_simple" selected>1 fixture - simple</option>
+              <option value="small_group">2-3 fixtures - grouped</option>
+              <option value="full_show_future">8+ fixtures - full show future</option>
+            </select>
+          </label>
+
+          <label class="qlc-web-control">
+            <span>QLC Palette</span>
+            <select id="qlcPalette">
+              <option value="limited_rgb_palette" selected>Limited RGB palette</option>
+              <option value="primary_rgb_test">Primary RGB test</option>
+              <option value="full_rgb_future">Full RGB future</option>
+            </select>
+          </label>
+
+          <label class="qlc-web-control">
+            <span>QLC Smooth</span>
+            <select id="qlcSmooth">
+              <option value="off">Off</option>
+              <option value="beat_aware" selected>Beat-aware</option>
+              <option value="safe">Safe</option>
+              <option value="debug_slow">Debug slow</option>
             </select>
           </label>
 
@@ -341,6 +394,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260605-4"></script>
+    <script src="app.js?v=20260606-13"></script>
   </body>
 </html>

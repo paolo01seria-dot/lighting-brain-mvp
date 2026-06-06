@@ -38,7 +38,35 @@ const componentLaneLabels = {
   vocal: "Vocal",
   other: "Other",
 };
-const componentLaneWindowSeconds = 12;
+const componentLaneWindowSeconds = 5;
+const liveSpectrumPixelsPerSecond = 180;
+const trainingSpectrumPixelsPerSecond = 150;
+const qlcBridgeUrl = "http://127.0.0.1:8791";
+const qlcWebMinIntervalMs = 50;
+const qlcMinHoldMs = 120;
+const qlcAllowedPalettes = {
+  primary_rgb_test: {
+    red: [255, 0, 0],
+    green: [0, 255, 0],
+    blue: [0, 0, 255],
+  },
+  limited_rgb_palette: {
+    red: [255, 0, 0],
+    green: [0, 255, 0],
+    blue: [0, 0, 255],
+    yellow: [255, 255, 0],
+    violet: [255, 0, 255],
+  },
+};
+const qlcPrimaryColors = qlcAllowedPalettes.primary_rgb_test;
+const qlcLimitedColors = qlcAllowedPalettes.limited_rgb_palette;
+const qlcColorNames = {
+  red: [255, 0, 0],
+  green: [0, 255, 0],
+  blue: [0, 0, 255],
+  yellow: [255, 255, 0],
+  violet: [255, 0, 255],
+};
 
 const genreProfiles = {
   house: { smoothing: 0.48, pulse: 1.28, palette: [1, 2, 3, 4], motion: "bounce", chase: 1.0, threshold: 0.062, decay: 0.78, spread: 2 },
@@ -57,6 +85,10 @@ const elements = {
   trackLabel: document.querySelector("#trackLabel"),
   outputTarget: document.querySelector("#outputTarget"),
   outputLabel: document.querySelector("#outputLabel"),
+  qlcProfile: document.querySelector("#qlcProfile"),
+  qlcFixtureCapacity: document.querySelector("#qlcFixtureCapacity"),
+  qlcPalette: document.querySelector("#qlcPalette"),
+  qlcSmooth: document.querySelector("#qlcSmooth"),
   genreProfile: document.querySelector("#genreProfile"),
   playButton: document.querySelector("#playButton"),
   stopButton: document.querySelector("#stopButton"),
@@ -170,8 +202,24 @@ let lastEventSecond = -1;
 let categoryCounters = {};
 let currentSceneByCategory = {};
 let componentHistory = [];
+let liveSpectrumWindowStartedAt = null;
 const enableAdvancedCueEditing = false;
 let cueEditingDisabledLogged = false;
+let lastQlcWebSendAt = 0;
+let lastQlcWebSceneKey = "";
+let qlcWebBlackoutSent = false;
+let activeOutputTarget = elements.outputTarget?.value ?? "tester";
+let lastQlcPhysicalColorKey = "";
+let lastQlcPhysicalColorAt = 0;
+let lastQlcPhysicalPhaseMode = "";
+let lastQlcHeldLogAt = 0;
+let lastQlcSmoothModeLog = "";
+let lastQlcCapacityColorKey = "";
+let lastQlcCapacityColorAt = 0;
+let lastQlcCapacitySceneCategory = "";
+let lastQlcCapacitySelectedIntent = "";
+let lastQlcCapacityIntensity = 0;
+let lastQlcCapacityLogAt = 0;
 
 let lights = [];
 let lightStates = [];
@@ -198,6 +246,7 @@ let trainingCapture = {
 function buildLights(count, keepPositions = true) {
   const nextCount = clamp(Math.round(count), 1, 32);
   elements.lightCount.value = String(nextCount);
+  syncQlcFixtureCapacity(nextCount);
   if (!keepPositions || positions.length !== nextCount) {
     positions = defaultPositions(nextCount);
   }
@@ -620,6 +669,7 @@ function buildLightFramesFromMusicalTimeline(timeline) {
     addBoundary(segment.end, { type: "segment_end", segment });
   });
   timeline.beats.forEach((beat) => addBoundary(beat.time, { type: "beat", beat }));
+  addSingleFixtureThreeQuarterBoundaries(timeline, addBoundary);
   timeline.downbeats.forEach((downbeat) => addBoundary(downbeat.time, { type: "downbeat", downbeat }));
   timeline.onsets
     .filter((onset) => onset.strength >= 0.58 || onset.confidence >= 0.75)
@@ -636,7 +686,8 @@ function buildLightFramesFromMusicalTimeline(timeline) {
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
     const segment = segmentAtMusicalTime(timeline, start);
     const sourceEvent = preferredSourceEvent(ordered[index].sourceEvents);
-    const metadata = sourceEvent?.metadata ?? {};
+    const metadataEvent = preferredMetadataEvent(ordered[index].sourceEvents) ?? sourceEvent;
+    const metadata = metadataEvent?.metadata ?? {};
     frames.push({
       id: `lf_${String(frames.length + 1).padStart(4, "0")}`,
       time: start,
@@ -653,9 +704,70 @@ function buildLightFramesFromMusicalTimeline(timeline) {
   return frames;
 }
 
+function addSingleFixtureThreeQuarterBoundaries(timeline, addBoundary) {
+  if ((lights.length || Number(elements.lightCount?.value ?? 1)) > 1) return;
+  const beats = [...(timeline.beats ?? [])].sort((left, right) => Number(left.time ?? 0) - Number(right.time ?? 0));
+  beats.forEach((beat, index) => {
+    const start = Number(beat.time ?? 0);
+    if (!Number.isFinite(start)) return;
+    const sourceSnapshot = frameSnapshotAtOrBefore(timeline, start);
+    if (!snapshotUsesSingleFixtureThreeQuarterHold(sourceSnapshot)) return;
+    const nextBeat = Number(beats[index + 1]?.time);
+    const intervalFromBpm = Number(beat.bpm) > 0 ? 60 / Number(beat.bpm) : null;
+    const interval = Number.isFinite(nextBeat) && nextBeat > start
+      ? nextBeat - start
+      : Number.isFinite(intervalFromBpm)
+        ? intervalFromBpm
+        : null;
+    if (!Number.isFinite(interval) || interval <= 0) return;
+    const blackoutTime = start + interval * 0.75;
+    const endTime = Math.min(start + interval, timeline.duration);
+    if (blackoutTime > start && blackoutTime < endTime) {
+      addBoundary(blackoutTime, {
+        type: "single_fixture_blackout_quarter",
+        metadata: {
+          sample_category: "single_fixture_blackout_quarter",
+          scene_category: "single_fixture_3_4_full_1_4_black",
+          timing_intent: "blackout",
+          lighting_intent: "blackout",
+          light_snapshot: blackoutSnapshotFrom(sourceSnapshot),
+        },
+      });
+    }
+    addBoundary(endTime, {
+      type: "single_fixture_beat_end",
+      metadata: {
+        sample_category: "single_fixture_beat_end",
+        scene_category: "single_fixture_beat_boundary",
+        timing_intent: "single_fixture_three_quarter_hold",
+        lighting_intent: "single_fixture_hold",
+      },
+    });
+  });
+}
+
+function snapshotUsesSingleFixtureThreeQuarterHold(snapshot) {
+  if (!Array.isArray(snapshot)) return false;
+  return snapshot.some((state) => state?.timingIntent === "single_fixture_three_quarter_hold");
+}
+
 function preferredSourceEvent(sourceEvents) {
   if (!Array.isArray(sourceEvents) || !sourceEvents.length) return null;
   return [...sourceEvents].sort((left, right) => eventTypePriority(left.type) - eventTypePriority(right.type))[0];
+}
+
+function preferredMetadataEvent(sourceEvents) {
+  if (!Array.isArray(sourceEvents) || !sourceEvents.length) return null;
+  return [...sourceEvents]
+    .filter((event) => event?.metadata?.light_snapshot || event?.metadata?.timing_intent || event?.metadata?.lighting_intent)
+    .sort((left, right) => eventTypePriority(left.type) - eventTypePriority(right.type))[0] ?? null;
+}
+
+function frameSnapshotAtOrBefore(timeline, time) {
+  const events = [...(timeline.events ?? [])]
+    .filter((event) => Number(event.time ?? 0) <= time + 0.0001 && Array.isArray(event.metadata?.light_snapshot))
+    .sort((left, right) => Number(right.time ?? 0) - Number(left.time ?? 0));
+  return events[0]?.metadata?.light_snapshot ?? null;
 }
 
 function segmentAtMusicalTime(timeline, time) {
@@ -860,7 +972,7 @@ function stopPlayback(options = {}) {
   lastEventSecond = -1;
   categoryCounters = {};
   currentSceneByCategory = {};
-  componentHistory = [];
+  resetSpectrumHistory();
   setState(hasLoadedAudio() ? "Ready" : "Idle");
   elements.playButton.disabled = !hasLoadedAudio();
   elements.playButton.textContent = "Play";
@@ -868,6 +980,7 @@ function stopPlayback(options = {}) {
   if (!keepLights) blackoutLights();
   updateMeter(0);
   updatePlayerTime();
+  maybeSendQlcWebBlackout();
 }
 
 async function playTimeline() {
@@ -924,6 +1037,7 @@ function stopTimelinePlayback(options = {}) {
     updateMeter(0);
     if (!keepLights) blackoutLights();
     updatePlayerTime();
+    maybeSendQlcWebBlackout();
   }
 }
 
@@ -1169,16 +1283,19 @@ function shouldHoldSparseChase(time, profile, energy) {
 function triggerPattern(context) {
   const count = lights.length;
   if (!count) return;
+  const rigCapacity = rigCapacityForLightCount(count);
   const trend = energyTrend(context.energy - previousEnergy);
-  const sceneTimingIntent = timingIntentForSample(context.category, null, context.energy, trend);
-  const sceneLightingIntent = lightingIntentForSample(context.category, null, context.energy, trend);
+  const rawSceneTimingIntent = timingIntentForSample(context.category, null, context.energy, trend);
+  const sceneTimingIntent = timingIntentForRig(rawSceneTimingIntent, context, rigCapacity);
+  const sceneLightingIntent = lightingIntentForRig(lightingIntentForSample(context.category, null, context.energy, trend), sceneTimingIntent);
   const beatStep = Math.floor(context.time / Math.max(musicalClock.interval ?? 0.5, 0.24));
 
-  const activeIndexes = context.gesture
+  const rawActiveIndexes = context.gesture
     ? pickGestureLights(context, count)
-    : pickActiveLights(context.profile, context.time, count, context.strong, context.sparse, context.clockSource, context.energy);
+    : pickActiveLights(context.profile, context.time, count, context.strong, context.sparse, context.clockSource, context.energy, rigCapacity);
+  const activeIndexes = rawActiveIndexes.slice(0, rigCapacity.maxPulseLights);
   activeIndexes.forEach((index, order) => {
-    const colorIndex = pickColorIndex(context, index, order);
+    const colorIndex = pickRigColorIndex(context, index, order, "pulse", rigCapacity);
     const clockBoost = context.clockSource && context.clockSource !== "none" ? 0.08 : 0;
     const base = context.strong ? 0.96 : context.sparse ? 0.48 : 0.62 + clockBoost;
     const spectral = context.low * 0.2 + context.mid * 0.14 + context.high * 0.18;
@@ -1199,11 +1316,135 @@ function triggerPattern(context) {
     lightStates[index] = normalizeLightState(lightStates[index], { index, timingIntent: sceneTimingIntent });
   });
 
-  blackoutNonActive(activeIndexes, context.strong ? 0.08 : 0.025);
+  const anchorIndexes = pickRigAnchorLights(context, count, activeIndexes, rigCapacity);
+  anchorIndexes.forEach((index, order) => {
+    const colorIndex = pickRigColorIndex(context, index, order, "anchor", rigCapacity);
+    const anchorBase = context.sparse ? 0.44 : context.category === "steady_bass_pulse" ? 0.5 : 0.38;
+    const anchorIntensity = clamp(anchorBase + context.energy * 0.24 - order * 0.025, 0.22, 0.72);
+    lightStates[index].intensity = Math.max(lightStates[index].intensity * 0.92, anchorIntensity);
+    lightStates[index].age = Math.min(lightStates[index].age, 4);
+    lightStates[index].colorIndex = colorIndex;
+    lightStates[index].lightingIntent = "sustain";
+    lightStates[index].timingIntent = "sustain";
+    lightStates[index].enabled = true;
+    lightStates[index].colorMode = "auto";
+    lightStates[index].blackout = false;
+    lightStates[index].manualColorIndex = null;
+    lightStates[index].manualRandomColor = null;
+    lightStates[index].phaseFirstHalf = true;
+    lightStates[index].phaseSecondHalf = true;
+    lightStates[index].phaseMode = "full_beat";
+    lightStates[index] = normalizeLightState(lightStates[index], { index, timingIntent: "sustain" });
+  });
+
+  blackoutNonActive([...activeIndexes, ...anchorIndexes], rigCapacity.blackoutFloor(context));
   updateBrainSemantics(sceneLightingIntent, sceneTimingIntent);
 }
 
+function rigCapacityForLightCount(count) {
+  if (count <= 1) {
+    return {
+      name: "single_fixture",
+      maxPulseLights: 1,
+      anchorCount: 0,
+      colorHoldBeats: 16,
+      anchorColorHoldBeats: 16,
+      blackoutFloor: (context) => context.strong ? 0.03 : 0.015,
+    };
+  }
+  if (count <= 3) {
+    return {
+      name: "small_rig",
+      maxPulseLights: 2,
+      anchorCount: 0,
+      colorHoldBeats: 2,
+      anchorColorHoldBeats: 6,
+      blackoutFloor: (context) => context.strong ? 0.07 : 0.025,
+    };
+  }
+  if (count < 8) {
+    return {
+      name: "medium_rig",
+      maxPulseLights: 4,
+      anchorCount: count >= 5 ? 1 : 0,
+      colorHoldBeats: 1,
+      anchorColorHoldBeats: 8,
+      blackoutFloor: (context) => context.strong ? 0.08 : 0.035,
+    };
+  }
+  return {
+    name: "large_rig",
+    maxPulseLights: 6,
+    anchorCount: Math.min(4, Math.floor(count / 3)),
+    colorHoldBeats: 1,
+    anchorColorHoldBeats: 12,
+    blackoutFloor: (context) => context.strong ? 0.1 : 0.045,
+  };
+}
+
+function timingIntentForRig(timingIntent, context, rigCapacity) {
+  if (timingIntent === "blackout") return timingIntent;
+  if (rigCapacity.name === "single_fixture") {
+    if (context.energy <= 0.12 && !context.strong) return "sustain";
+    if (shouldUseSingleFixtureThreeQuarterHold({ ...context, timingIntent })) return "single_fixture_three_quarter_hold";
+    return "fade_sustain";
+  }
+  if (rigCapacity.name === "small_rig" && timingIntent === "strobe_like") {
+    return context.strong ? "alternate_halves" : "pulse_full_beat";
+  }
+  return timingIntent;
+}
+
+function shouldUseSingleFixtureThreeQuarterHold(context = {}) {
+  const category = String(context.category ?? "").toLowerCase();
+  const timing = String(context.timingIntent ?? "").toLowerCase();
+  const lighting = String(context.lightingIntent ?? "").toLowerCase();
+  const energy = Number(context.energy ?? 0);
+  if (category === "steady_bass_pulse" && energy >= 0.24 && energy <= 0.72) return true;
+  if (category === "buildup" && energy >= 0.42 && !context.strong) return true;
+  if (timing.includes("pulse_full_beat") && lighting !== "strobe_like" && energy <= 0.68) return true;
+  return false;
+}
+
+function lightingIntentForRig(lightingIntent, timingIntent) {
+  if (timingIntent === "blackout") return "blackout";
+  if (timingIntent === "single_fixture_three_quarter_hold") return "single_fixture_hold";
+  if (timingIntent === "sustain" || timingIntent === "fade_sustain") return "sustain";
+  return lightingIntent;
+}
+
+function rigBeatStep(time, holdBeats) {
+  const interval = Math.max(musicalClock.interval ?? 0.5, 0.24);
+  const holdSeconds = Math.max(interval * holdBeats, 0.3);
+  return Math.floor(time / holdSeconds);
+}
+
+function pickRigColorIndex(context, index, order, role, rigCapacity) {
+  if (role !== "anchor" && rigCapacity.colorHoldBeats <= 1) {
+    return pickColorIndex(context, index, order);
+  }
+  const holdBeats = role === "anchor" ? rigCapacity.anchorColorHoldBeats : rigCapacity.colorHoldBeats;
+  const heldStep = rigBeatStep(context.time, holdBeats);
+  const heldContext = {
+    ...context,
+    time: heldStep * Math.max(musicalClock.interval ?? 0.5, 0.24),
+  };
+  return pickColorIndex(heldContext, index, order);
+}
+
+function pickRigAnchorLights(context, count, activeIndexes, rigCapacity) {
+  if (rigCapacity.anchorCount <= 0 || context.category === "high_energy_drop") return [];
+  if (context.category === "silence_or_pause" || context.category === "stop_music_moment") return [];
+  const step = rigBeatStep(context.time + sceneVariant, rigCapacity.anchorColorHoldBeats);
+  const candidates = symmetricalIndexes(step, count, Math.min(count, rigCapacity.anchorCount * 2))
+    .filter((index) => !activeIndexes.includes(index));
+  return candidates.slice(0, rigCapacity.anchorCount);
+}
+
 function phaseConfigForTimingIntent(timingIntent, order, beatStep) {
+  if (timingIntent === "single_fixture_three_quarter_hold") {
+    return { first: true, second: true, mode: "full_beat" };
+  }
   if (timingIntent === "pulse_first_half") {
     return { first: true, second: false, mode: "first_half" };
   }
@@ -1243,7 +1484,7 @@ function pickGestureLights(context, count) {
   return musicalSingleOrPair(step, count, context.sparse);
 }
 
-function pickActiveLights(profile, time, count, strong, sparse = false, clockSource = "none", energy = 0) {
+function pickActiveLights(profile, time, count, strong, sparse = false, clockSource = "none", energy = 0, rigCapacity = rigCapacityForLightCount(count)) {
   const interval = Math.max(musicalClock.interval ?? 0.5, 0.24);
   const pulseStep = Math.floor(time / interval);
   const halfPulseStep = Math.floor(time / Math.max(interval / 2, 0.12));
@@ -1253,14 +1494,14 @@ function pickActiveLights(profile, time, count, strong, sparse = false, clockSou
   const pairCount = strong && !stableScene ? 2 : 1;
 
   if (weakGesture) {
-    return mirrorSwapIndexes(halfPulseStep, count, sparse);
+    return mirrorSwapIndexes(halfPulseStep, count, sparse).slice(0, rigCapacity.maxPulseLights);
   }
 
   if (clockSource === "high_pattern" && strong) {
-    return symmetricalIndexes(pulseStep, count, Math.min(count, 4));
+    return symmetricalIndexes(pulseStep, count, Math.min(count, 4, rigCapacity.maxPulseLights));
   }
 
-  return symmetricalIndexes(pulseStep, count, Math.min(count, pairCount * 2));
+  return symmetricalIndexes(pulseStep, count, Math.min(count, pairCount * 2, rigCapacity.maxPulseLights));
 }
 
 function musicalSingleOrPair(step, count, sparse) {
@@ -1451,6 +1692,17 @@ function manualLightColor(state) {
   return color;
 }
 
+function resolvedLightColorValue(color, state, context = {}) {
+  if (Array.isArray(color?.value)) return color.value;
+  if (color?.name === "casual") {
+    const resolved = state.manualRandomColor ?? stableCasualColor(context);
+    state.manualRandomColor = resolved;
+    state.colorMode = "random";
+    return resolved;
+  }
+  return [245, 247, 248];
+}
+
 function phaseModeFromHalves(first, second) {
   if (first && second) return "full_beat";
   if (first) return "first_half";
@@ -1476,6 +1728,7 @@ function timingIntentPhaseMode(timingIntent, context = {}) {
   if (timingIntent === "pulse_first_half") return "first_half";
   if (timingIntent === "pulse_second_half") return "second_half";
   if (timingIntent === "pulse_full_beat") return "full_beat";
+  if (timingIntent === "single_fixture_three_quarter_hold") return "full_beat";
   if (timingIntent === "blackout") return "off";
   if (timingIntent === "alternate_halves" || timingIntent === "strobe_like") {
     const index = Number(context.index ?? context.fixtureIndex ?? 0);
@@ -1488,6 +1741,7 @@ function finalTimingIntentForPhase(phaseMode, rawTimingIntent) {
   if (phaseMode === "off") return "blackout";
   if (phaseMode === "first_half") return "pulse_first_half";
   if (phaseMode === "second_half") return "pulse_second_half";
+  if (phaseMode === "full_beat" && rawTimingIntent === "single_fixture_three_quarter_hold") return "single_fixture_three_quarter_hold";
   if (phaseMode === "full_beat" && rawTimingIntent === "pulse_full_beat") return "pulse_full_beat";
   if (phaseMode === "full_beat" && (rawTimingIntent === "alternate_halves" || rawTimingIntent === "strobe_like")) return rawTimingIntent;
   return "sustain";
@@ -1512,6 +1766,7 @@ function normalizeLightState(rawState = {}, context = {}) {
   if (timingIntent === "pulse_first_half") phaseMode = "first_half";
   if (timingIntent === "pulse_second_half") phaseMode = "second_half";
   if (timingIntent === "pulse_full_beat") phaseMode = "full_beat";
+  if (timingIntent === "single_fixture_three_quarter_hold") phaseMode = "full_beat";
   if (timingIntent === "blackout") phaseMode = "off";
 
   const rawIntensity = clamp(Number(rawState.intensity ?? 0), 0, 1);
@@ -1549,6 +1804,8 @@ function normalizeLightState(rawState = {}, context = {}) {
     ? "blackout"
     : finalTimingIntent === "pulse_first_half" || finalTimingIntent === "pulse_second_half" || finalTimingIntent === "pulse_full_beat"
       ? "pulse"
+      : finalTimingIntent === "single_fixture_three_quarter_hold"
+        ? "single_fixture_hold"
       : finalTimingIntent === "alternate_halves"
         ? "alternating_pulse"
         : finalTimingIntent === "strobe_like"
@@ -1630,6 +1887,18 @@ function applyPhaseButtonVisual(button, visualState) {
   button.classList.toggle("is-selected", visualState.selected);
   button.classList.toggle("is-off", visualState.off);
   button.style.setProperty("--phase-button-color", visualState.color);
+  button.style.setProperty("--phase-button-rgb", cssRgbTriplet(visualState.color));
+}
+
+function cssRgbTriplet(color) {
+  const match = String(color ?? "").match(/rgba?\(([^)]+)\)/i);
+  if (!match) return "79, 195, 177";
+  const parts = match[1]
+    .split(",")
+    .slice(0, 3)
+    .map((part) => clamp(Number.parseFloat(part.trim()), 0, 255));
+  if (parts.length < 3 || parts.some((value) => !Number.isFinite(value))) return "79, 195, 177";
+  return parts.map((value) => String(Math.round(value))).join(", ");
 }
 
 function forceLightVisualOff(light) {
@@ -1644,6 +1913,7 @@ function forceLightVisualOff(light) {
   light.style.removeProperty("--phase-lens-fill");
   light.style.removeProperty("--flat-phase-fill");
   light.style.removeProperty("--flat-bulb-fill");
+  light.style.removeProperty("--light-rgb");
   light.style.removeProperty("--phase-left");
   light.style.removeProperty("--phase-right");
   light.style.removeProperty("--phase-button-color");
@@ -1657,10 +1927,12 @@ function clearPhaseVisualResidues() {
     light.style.removeProperty("--phase-button-color");
     light.style.removeProperty("--phase-lens-fill");
     light.style.removeProperty("--flat-phase-fill");
+    light.style.removeProperty("--light-rgb");
     light.querySelectorAll(".phase-button").forEach((button) => {
       button.classList.remove("is-selected");
       button.classList.add("is-off");
       button.style.setProperty("--phase-button-color", "rgb(0, 0, 0)");
+      button.style.setProperty("--phase-button-rgb", "0, 0, 0");
     });
   });
 }
@@ -1742,6 +2014,382 @@ function logLightOff(index, reason) {
   logEvent(`[light-off] id=${index} reason=${reason}`);
 }
 
+function qlcWebBridgeActive() {
+  return elements.outputTarget?.value === "qlc_web_bridge";
+}
+
+function postQlcWeb(path, payload) {
+  return fetch(`${qlcBridgeUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? {}),
+  }).then((response) => {
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response;
+  }).catch((error) => {
+    console.warn(`[qlc-web] failed ${path}`, error);
+    logEvent(`[qlc-web] failed ${path}: ${error.message}`);
+  });
+}
+
+function sendQlcWebBlackout() {
+  if (qlcWebBlackoutSent && lastQlcWebSceneKey === "blackout") return;
+  qlcWebBlackoutSent = true;
+  lastQlcWebSceneKey = "blackout";
+  lastQlcPhysicalColorKey = "0,0,0";
+  lastQlcPhysicalPhaseMode = "off";
+  lastQlcPhysicalColorAt = performance.now();
+  lastQlcCapacityColorKey = "0,0,0";
+  lastQlcCapacityColorAt = performance.now();
+  lastQlcCapacitySceneCategory = "blackout";
+  lastQlcCapacitySelectedIntent = "blackout";
+  lastQlcCapacityIntensity = 0;
+  lastQlcWebSendAt = performance.now();
+  console.log("[qlc-web] blackout");
+  console.log("[qlc-web] POST /blackout");
+  postQlcWeb("/blackout", {});
+}
+
+function maybeSendQlcWebBlackout() {
+  if (!qlcWebBridgeActive()) return;
+  sendQlcWebBlackout();
+}
+
+function qlcSmoothHoldMs() {
+  const mode = elements.qlcSmooth?.value ?? "beat_aware";
+  if (mode === "off") return 0;
+  if (mode === "safe") return 220;
+  if (mode === "debug_slow") return 400;
+  return qlcMinHoldMs;
+}
+
+function qlcFixtureCapacityValue() {
+  return qlcFixtureCapacityForLightCount(lights.length || Number(elements.lightCount?.value ?? 1));
+}
+
+function qlcFixtureCapacityForLightCount(count) {
+  const normalizedCount = clamp(Math.round(Number(count ?? 1)), 1, 32);
+  if (normalizedCount <= 1) return "one_fixture_simple";
+  if (normalizedCount <= 3) return "small_group";
+  return "full_show_future";
+}
+
+function syncQlcFixtureCapacity(count = lights.length || Number(elements.lightCount?.value ?? 1)) {
+  const capacity = qlcFixtureCapacityForLightCount(count);
+  if (elements.qlcFixtureCapacity && elements.qlcFixtureCapacity.value !== capacity) {
+    elements.qlcFixtureCapacity.value = capacity;
+  }
+  return capacity;
+}
+
+function qlcFixtureBudget() {
+  const capacity = qlcFixtureCapacityValue();
+  if (capacity === "small_group") return 3;
+  if (capacity === "full_show_future") return 8;
+  return 1;
+}
+
+function qlcCapacityColorHoldMs() {
+  const capacity = qlcFixtureCapacityValue();
+  const intervalSeconds = Number(musicalClock?.interval);
+  if (capacity === "one_fixture_simple") {
+    if (Number.isFinite(intervalSeconds) && intervalSeconds > 0 && musicalClock.confidence >= 0.16) {
+      return Math.max(2200, Math.min(7200, Math.round(intervalSeconds * 8 * 1000)));
+    }
+    return 2400;
+  }
+  if (Number.isFinite(intervalSeconds) && intervalSeconds > 0 && musicalClock.confidence >= 0.16) {
+    return Math.max(350, Math.min(900, Math.round(intervalSeconds * 1000)));
+  }
+  return 300;
+}
+
+function stableHash(value) {
+  const text = String(value ?? "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function qlcPrimaryFromIndex(index) {
+  return ["red", "green", "blue"][Math.abs(index) % 3];
+}
+
+function qlcLimitedColorFromIndex(index) {
+  return ["red", "green", "blue", "yellow", "violet"][Math.abs(index) % 5];
+}
+
+function nearestQlcPaletteColor(rgb, palette) {
+  let bestName = "red";
+  let bestDistance = Infinity;
+  Object.entries(palette).forEach(([name, color]) => {
+    const distance = ((rgb[0] - color[0]) ** 2) + ((rgb[1] - color[1]) ** 2) + ((rgb[2] - color[2]) ** 2);
+    if (distance < bestDistance) {
+      bestName = name;
+      bestDistance = distance;
+    }
+  });
+  return bestName;
+}
+
+function mapQlcColor(rawRgb, context = {}) {
+  const profile = elements.qlcProfile?.value ?? "single_rgb_test";
+  const qlcPalette = elements.qlcPalette?.value ?? "limited_rgb_palette";
+  const rgb = rawRgb.map((value) => clamp(Math.round(Number(value ?? 0)), 0, 255));
+  const [r, g, b] = rgb;
+  if (profile !== "single_rgb_test") {
+    return { rgb, name: "raw", reason: "full_mapping" };
+  }
+  if (r <= 0 && g <= 0 && b <= 0) {
+    return { rgb: [0, 0, 0], name: "blackout", reason: "blackout" };
+  }
+
+  const seed = stableHash([
+    context.index,
+    context.colorName,
+    context.timingIntent,
+    context.lightingIntent,
+    context.sampleCategory,
+    Math.floor((context.time ?? 0) / 8),
+  ].join(":"));
+  let colorName = null;
+  const colorNameRaw = String(context.colorName ?? "").toLowerCase();
+  const palette = qlcPalette === "primary_rgb_test" ? qlcPrimaryColors : qlcLimitedColors;
+  if (qlcPalette === "full_rgb_future") {
+    return { rgb, name: "raw", reason: "full_rgb_future" };
+  }
+  if (colorNameRaw === "red") colorName = "red";
+  else if (colorNameRaw === "green") colorName = "green";
+  else if (colorNameRaw === "blue") colorName = "blue";
+  else if (colorNameRaw === "yellow" || colorNameRaw === "amber" || colorNameRaw === "orange" || colorNameRaw === "warm") {
+    colorName = qlcPalette === "primary_rgb_test" ? (seed % 2 === 0 ? "red" : "green") : "yellow";
+  } else if (colorNameRaw === "violet" || colorNameRaw === "purple" || colorNameRaw === "magenta") {
+    colorName = qlcPalette === "primary_rgb_test" ? (seed % 2 === 0 ? "red" : "blue") : "violet";
+  } else if (colorNameRaw === "white" || colorNameRaw === "casual") {
+    colorName = qlcPalette === "primary_rgb_test" ? qlcPrimaryFromIndex(seed) : qlcLimitedColorFromIndex(seed);
+  } else if (r > 210 && g > 210 && b > 210) {
+    colorName = qlcPalette === "primary_rgb_test" ? qlcPrimaryFromIndex(seed) : qlcLimitedColorFromIndex(seed);
+  } else if (r > 150 && g > 110 && b < 130) colorName = qlcPalette === "primary_rgb_test" ? (seed % 2 === 0 ? "red" : "green") : "yellow";
+  else if (r > 130 && b > 130 && g < 150) colorName = qlcPalette === "primary_rgb_test" ? (seed % 2 === 0 ? "red" : "blue") : "violet";
+  else if (g > 130 && b > 130 && r < 130) colorName = qlcPalette === "primary_rgb_test" ? (seed % 2 === 0 ? "green" : "blue") : (seed % 2 === 0 ? "green" : "blue");
+  else colorName = nearestQlcPaletteColor(rgb, palette);
+
+  if (!palette[colorName]) colorName = nearestQlcPaletteColor(rgb, palette);
+  const mapped = palette[colorName];
+  console.log(`[qlc-web] palette=${qlcPalette} rawColor=(${r},${g},${b}) mappedColor=(${mapped[0]},${mapped[1]},${mapped[2]}) colorName=${colorName}`);
+  return { rgb: mapped, name: colorName, reason: `palette_${qlcPalette}` };
+}
+
+function qlcStrongEventReason(candidate, scene) {
+  if (scene.intensity <= 0 || (scene.r === 0 && scene.g === 0 && scene.b === 0)) return "blackout";
+  const timing = String(candidate?.timingIntent ?? "").toLowerCase();
+  const lighting = String(candidate?.lightingIntent ?? "").toLowerCase();
+  const sample = String(candidate?.sampleCategory ?? "").toLowerCase();
+  const phaseMode = String(candidate?.phaseMode ?? "").toLowerCase();
+  if (["first_half", "second_half", "full_beat", "off"].includes(phaseMode) && phaseMode !== lastQlcPhysicalPhaseMode) return `phase_${phaseMode}`;
+  if (timing.includes("strobe")) return "strobe_intent";
+  if (timing.includes("first_half") || timing.includes("second_half") || timing.includes("full_beat")) return timing;
+  if (sample.includes("drop") || sample.includes("buildup")) return sample || "drop";
+  if (lighting.includes("build") || lighting.includes("peak")) return lighting;
+  if (candidate?.beatPhase !== null && candidate?.beatPhase !== undefined && candidate.beatPhase < 0.08 && candidate.intensity >= 0.62) return "beat";
+  return null;
+}
+
+function qlcSelectedIntent(candidate, scene) {
+  const timing = String(candidate?.timingIntent ?? "").toLowerCase();
+  const lighting = String(candidate?.lightingIntent ?? "").toLowerCase();
+  const sample = String(candidate?.sampleCategory ?? "").toLowerCase();
+  const sceneCategory = String(candidate?.sceneCategory ?? "").toLowerCase();
+  if (scene.intensity <= 0 || (scene.r === 0 && scene.g === 0 && scene.b === 0) || timing.includes("blackout") || sample.includes("silence") || sample.includes("stop")) {
+    return "blackout";
+  }
+  if (sample.includes("drop") || sample.includes("buildup") || lighting.includes("build") || lighting.includes("peak") || timing.includes("strobe")) {
+    return "drop_downbeat_strong";
+  }
+  if (candidate?.beatPhase !== null && candidate?.beatPhase !== undefined && candidate.beatPhase < 0.1 && candidate.intensity >= 0.62) {
+    return "drop_downbeat_strong";
+  }
+  if (sample.includes("bass") || sceneCategory.includes("steady_bass") || sceneCategory.includes("groove") || timing.includes("pulse")) {
+    return "bass_pulse_main_groove";
+  }
+  if (sceneCategory && sceneCategory !== lastQlcCapacitySceneCategory) return "section_change";
+  if ((sample.includes("vocal") || sample.includes("snare")) && candidate.intensity >= 0.78) return "strong_vocal_snare_accent";
+  return "minor_onset_ignored";
+}
+
+function sceneWithQlcColor(scene, colorKey) {
+  const [r, g, b] = colorKey.split(",").map((value) => clamp(Math.round(Number(value)), 0, 255));
+  return { ...scene, r, g, b };
+}
+
+function updateQlcCapacityState(scene, candidate, selectedIntent, now) {
+  lastQlcCapacityColorKey = `${scene.r},${scene.g},${scene.b}`;
+  lastQlcCapacityColorAt = now;
+  lastQlcCapacitySceneCategory = candidate?.sceneCategory ?? candidate?.sampleCategory ?? "";
+  lastQlcCapacitySelectedIntent = selectedIntent;
+  lastQlcCapacityIntensity = scene.intensity;
+}
+
+function applyQlcFixtureCapacity(scene, candidate) {
+  const profile = elements.qlcProfile?.value ?? "single_rgb_test";
+  const capacity = qlcFixtureCapacityValue();
+  if (profile !== "single_rgb_test" || capacity !== "one_fixture_simple") return { scene, held: false };
+
+  const now = performance.now();
+  const colorKey = `${scene.r},${scene.g},${scene.b}`;
+  const currentKey = lastQlcCapacityColorKey;
+  const selectedIntent = qlcSelectedIntent(candidate, scene);
+  const fixtureBudget = qlcFixtureBudget();
+  const minHoldMs = qlcCapacityColorHoldMs();
+  const elapsedMs = currentKey ? now - lastQlcCapacityColorAt : Infinity;
+  const sourceCategory = candidate?.sceneCategory ?? candidate?.sampleCategory ?? "unknown";
+  const candidateChange = {
+    color: colorKey,
+    intensity: scene.intensity,
+    reason: selectedIntent,
+    sourceCategory,
+    timingIntent: candidate?.timingIntent ?? "",
+    phaseMode: candidate?.phaseMode ?? "",
+    strength: roundNumber(candidate?.intensity ?? scene.intensity, 3),
+  };
+  if (now - lastQlcCapacityLogAt > 250 || selectedIntent !== lastQlcCapacitySelectedIntent) {
+    console.log(`[qlc-web] capacity=${capacity} selectedIntent=${selectedIntent} fixtureBudget=${fixtureBudget}`);
+    lastQlcCapacityLogAt = now;
+  }
+
+  if (selectedIntent === "blackout") {
+    if (!lastQlcCapacityColorKey) {
+      updateQlcCapacityState(scene, candidate, selectedIntent, now);
+    } else {
+      lastQlcCapacitySceneCategory = sourceCategory;
+      lastQlcCapacitySelectedIntent = selectedIntent;
+      lastQlcCapacityIntensity = 0;
+    }
+    console.log("[qlc-web] allow change reason=blackout");
+    return { scene, held: false };
+  }
+  if (!currentKey) {
+    updateQlcCapacityState(scene, candidate, selectedIntent, now);
+    console.log("[qlc-web] allow change reason=initial");
+    return { scene, held: false };
+  }
+  if (colorKey === currentKey) {
+    lastQlcCapacitySceneCategory = sourceCategory;
+    lastQlcCapacitySelectedIntent = selectedIntent;
+    lastQlcCapacityIntensity = scene.intensity;
+    return { scene, held: false };
+  }
+
+  const sceneChanged = sourceCategory && sourceCategory !== lastQlcCapacitySceneCategory;
+  const strongReason = qlcStrongEventReason(candidate, scene);
+  const colorStableLongEnough = elapsedMs >= minHoldMs;
+  const beatAligned = candidate?.beatPhase !== null && candidate?.beatPhase !== undefined && candidate.beatPhase < 0.12;
+  const intensityDelta = Math.abs(scene.intensity - lastQlcCapacityIntensity);
+  const strongBeatColorChange = Boolean(strongReason && /drop|buildup|strobe|beat|build|peak|full_beat/.test(strongReason));
+  const sceneChangeAllowed = sceneChanged && elapsedMs >= minHoldMs * 0.5;
+  const strongColorAllowed = strongBeatColorChange && colorStableLongEnough;
+  if (sceneChangeAllowed || strongColorAllowed || (beatAligned && colorStableLongEnough) || colorStableLongEnough) {
+    const reason = sceneChangeAllowed ? "section_changed_after_hold" : strongColorAllowed ? `${strongReason}_after_hold` : beatAligned ? "beat_aligned_after_hold" : "color_stable_long_enough";
+    updateQlcCapacityState(scene, candidate, selectedIntent, now);
+    console.log(`[qlc-web] allow change reason=${reason}`);
+    return { scene, held: false };
+  }
+
+  console.log(`[qlc-web] color hold current=(${currentKey}) candidate=(${colorKey}) elapsedMs=${Math.round(elapsedMs)}`);
+  if (intensityDelta >= 0.05) {
+    const pulseScene = sceneWithQlcColor(scene, currentKey);
+    lastQlcCapacitySceneCategory = sourceCategory;
+    lastQlcCapacitySelectedIntent = selectedIntent;
+    lastQlcCapacityIntensity = pulseScene.intensity;
+    console.log(`[qlc-web] pulse allowed without color change reason=${strongReason ?? `intensity_delta_${roundNumber(intensityDelta, 3)}`}`);
+    return { scene: pulseScene, held: false };
+  }
+  console.log(`[qlc-web] held by fixture capacity reason=color_hold candidate=${JSON.stringify(candidateChange)} current=${currentKey}`);
+  return { scene: null, held: true };
+}
+
+function applyQlcSmoothing(scene, candidate) {
+  const profile = elements.qlcProfile?.value ?? "single_rgb_test";
+  if (profile !== "single_rgb_test") return { scene, held: false };
+  const mode = elements.qlcSmooth?.value ?? "beat_aware";
+  const minHoldMs = qlcSmoothHoldMs();
+  const modeKey = `${mode}:${minHoldMs}`;
+  if (lastQlcSmoothModeLog !== modeKey) {
+    console.log(`[qlc-web] smoothing mode=${mode} minHoldMs=${minHoldMs}`);
+    lastQlcSmoothModeLog = modeKey;
+  }
+  if (minHoldMs <= 0) return { scene, held: false };
+
+  const colorKey = `${scene.r},${scene.g},${scene.b}`;
+  const now = performance.now();
+  const reason = qlcStrongEventReason(candidate, scene);
+  if (!lastQlcPhysicalColorKey || colorKey === lastQlcPhysicalColorKey) {
+    lastQlcPhysicalColorKey = colorKey;
+    lastQlcPhysicalPhaseMode = candidate?.phaseMode ?? "";
+    lastQlcPhysicalColorAt = now;
+    return { scene, held: false };
+  }
+  if (reason) {
+    console.log(`[qlc-web] smoothing=${mode} minHoldMs=${minHoldMs} allowed reason=${reason}`);
+    lastQlcPhysicalColorKey = colorKey;
+    lastQlcPhysicalPhaseMode = candidate?.phaseMode ?? "";
+    lastQlcPhysicalColorAt = now;
+    return { scene, held: false };
+  }
+  const elapsed = now - lastQlcPhysicalColorAt;
+  if (elapsed < minHoldMs) {
+    const remainingMs = Math.ceil(minHoldMs - elapsed);
+    if (now - lastQlcHeldLogAt > 180) {
+      console.log(`[qlc-web] held color current=(${lastQlcPhysicalColorKey}) candidate=(${colorKey}) remainingMs=${remainingMs}`);
+      lastQlcHeldLogAt = now;
+    }
+    return { scene: null, held: true };
+  }
+  lastQlcPhysicalColorKey = colorKey;
+  lastQlcPhysicalPhaseMode = candidate?.phaseMode ?? "";
+  lastQlcPhysicalColorAt = now;
+  return { scene, held: false };
+}
+
+function sendQlcWebScene(candidate) {
+  if (!qlcWebBridgeActive()) return;
+  const mappedColor = mapQlcColor(candidate.rgb, candidate);
+  const safeIntensity = clamp(Number(candidate.intensity ?? 0), 0, 1);
+  const scene = {
+    r: mappedColor.rgb[0],
+    g: mappedColor.rgb[1],
+    b: mappedColor.rgb[2],
+    intensity: roundNumber(safeIntensity, 3),
+  };
+  const capacityLimited = applyQlcFixtureCapacity(scene, candidate);
+  if (capacityLimited.held) return;
+  if (!capacityLimited.scene) return;
+  const smoothed = applyQlcSmoothing(capacityLimited.scene, candidate);
+  if (smoothed.held) return;
+  if (!smoothed.scene) return;
+  const finalScene = smoothed.scene;
+  const key = `${finalScene.r},${finalScene.g},${finalScene.b},${finalScene.intensity}`;
+  const now = performance.now();
+  if (key === lastQlcWebSceneKey) return;
+  if (now - lastQlcWebSendAt < qlcWebMinIntervalMs) return;
+  lastQlcWebSceneKey = key;
+  lastQlcWebSendAt = now;
+  qlcWebBlackoutSent = finalScene.r === 0 && finalScene.g === 0 && finalScene.b === 0 && finalScene.intensity === 0;
+  console.log(
+    `[qlc-web] profile=${elements.qlcProfile?.value ?? "single_rgb_test"} selectedVirtualLight=${candidate.index ?? "-"} `
+    + `rawColor=(${candidate.rgb[0]},${candidate.rgb[1]},${candidate.rgb[2]}) mappedColor=(${finalScene.r},${finalScene.g},${finalScene.b}) intensity=${finalScene.intensity}`
+  );
+  console.log(`[qlc-web] send scene fixture_001 rgb=(${finalScene.r},${finalScene.g},${finalScene.b}) intensity=${finalScene.intensity}`);
+  console.log("[qlc-web] POST /scene");
+  postQlcWeb("/scene", {
+    fixtures: {
+      fixture_001: finalScene,
+    },
+  });
+}
+
 function renderLights() {
   const playingReview = Boolean(reviewAnimationFrame);
   const liveListening = isPlaying && (inputMode === "mic_device" || inputMode === "system_audio");
@@ -1750,6 +2398,7 @@ function renderLights() {
   const editStaticMode = trainingReviewModeActive() && !phaseAnimatedMode;
   const reviewTime = phaseAnimatedMode ? currentPlaybackTime() : trainingCapture.reviewTime ?? currentPlaybackTime();
   const beatPhase = phaseAnimatedMode ? currentBeatPhaseAt(reviewTime).phase : null;
+  let selectedVirtualLight = null;
   lights.forEach((light, index) => {
     const state = normalizeLightState(lightStates[index] ?? { intensity: 0, colorIndex: index % colors.length }, { index });
     lightStates[index] = state;
@@ -1757,7 +2406,7 @@ function renderLights() {
     const manualColor = manualLightColor(state);
     const color = manualColor ?? colors[state.colorIndex];
     let manualCasual = Boolean(editStaticMode && manual && manualColor?.name === "casual");
-    const [r, g, b] = color.value;
+    const [r, g, b] = resolvedLightColorValue(color, state, { index, colorIndex: state.colorIndex, time: reviewTime });
     const phaseState = phaseStateForLight(state);
     if (phaseState.off) manualCasual = false;
     const manualBlackout = Boolean(manual && (manualColor?.blackout || phaseState.off));
@@ -1770,7 +2419,30 @@ function renderLights() {
     const timingIntent = state.timingIntent ?? timingIntentForLightState(state);
     const effectiveIntensity = lightOff ? 0 : applyPhaseEnvelope(intensity, state, beatPhase, timingIntent, phaseAnimatedMode);
     const visible = effectiveIntensity > 0.04;
+    if (visible && !lightOff) {
+      const candidate = {
+        index,
+        rgb: [r, g, b],
+        colorName: color.name,
+        intensity: effectiveIntensity,
+        timingIntent,
+        lightingIntent: state.lightingIntent,
+        phaseMode: phaseState.phaseMode,
+        sampleCategory: elements.currentSampleCategory?.textContent ?? "",
+        sceneCategory: lastSceneCategory,
+        beatPhase,
+        time: reviewTime,
+      };
+      if (
+        !selectedVirtualLight
+        || candidate.intensity > selectedVirtualLight.intensity + 0.015
+        || (Math.abs(candidate.intensity - selectedVirtualLight.intensity) <= 0.015 && candidate.index < selectedVirtualLight.index)
+      ) {
+        selectedVirtualLight = candidate;
+      }
+    }
     const flatColor = `rgb(${r}, ${g}, ${b})`;
+    light.style.setProperty("--light-rgb", `${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}`);
     const phaseButtonState = phaseButtonVisualState(state, phaseState, flatColor, manualCasual, lightOff);
     const leftPhaseButton = light.querySelector('[data-phase="first"]');
     const rightPhaseButton = light.querySelector('[data-phase="second"]');
@@ -1851,6 +2523,25 @@ function renderLights() {
     applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
     if (playingReview) reviewPerfDomWrites += 1;
   });
+  if (qlcWebBridgeActive()) {
+    if (selectedVirtualLight) {
+      sendQlcWebScene(selectedVirtualLight);
+    } else {
+      sendQlcWebScene({
+        index: null,
+        rgb: [0, 0, 0],
+        colorName: "blackout",
+        intensity: 0,
+        timingIntent: "blackout",
+        lightingIntent: "blackout",
+        phaseMode: "off",
+        sampleCategory: elements.currentSampleCategory?.textContent ?? "",
+        sceneCategory: lastSceneCategory,
+        beatPhase,
+        time: reviewTime,
+      });
+    }
+  }
   updateBrainSemantics(undefined, undefined);
 }
 
@@ -2408,6 +3099,7 @@ function renderTimelineBeats(context, timeline, width, height, ratio) {
   context.strokeStyle = "rgba(255, 255, 255, 0.18)";
   context.lineWidth = Math.max(1, ratio);
   timeline.beats.forEach((beat) => {
+    if (timelineHasLightFrameAt(timeline, beat.time)) return;
     const x = timelineX(beat.time, timeline, width);
     context.beginPath();
     context.moveTo(x, height * 0.28);
@@ -2420,6 +3112,7 @@ function renderTimelineDownbeats(context, timeline, width, height, ratio) {
   context.strokeStyle = "rgba(255, 196, 87, 0.78)";
   context.lineWidth = Math.max(1, 1.6 * ratio);
   timeline.downbeats.forEach((downbeat) => {
+    if (timelineHasLightFrameAt(timeline, downbeat.time)) return;
     const x = timelineX(downbeat.time, timeline, width);
     context.beginPath();
     context.moveTo(x, 0);
@@ -2430,6 +3123,7 @@ function renderTimelineDownbeats(context, timeline, width, height, ratio) {
 
 function renderTimelineOnsets(context, timeline, width, height, ratio) {
   timeline.onsets.forEach((onset) => {
+    if (timelineHasLightFrameAt(timeline, onset.time)) return;
     const x = timelineX(onset.time, timeline, width);
     const markerHeight = Math.max(8 * ratio, onset.strength * height * 0.42);
     context.fillStyle = `rgba(245, 247, 248, ${0.18 + onset.strength * 0.46})`;
@@ -2437,19 +3131,24 @@ function renderTimelineOnsets(context, timeline, width, height, ratio) {
   });
 }
 
+function timelineHasLightFrameAt(timeline, time) {
+  const safeTime = roundNumber(Number(time ?? 0), 4);
+  return (timeline.lightFrames ?? []).some((frame) => roundNumber(Number(frame.time ?? 0), 4) === safeTime);
+}
+
 function renderTimelineLightFrames(context, timeline, width, height, ratio) {
-  context.strokeStyle = "rgba(79, 195, 177, 0.72)";
+  context.strokeStyle = "rgba(245, 247, 248, 0.72)";
   context.lineWidth = Math.max(1, 1.4 * ratio);
   timeline.lightFrames.forEach((frame, index) => {
     const x = timelineX(frame.time, timeline, width);
     const selected = index === timeline.cursor.frameIndex;
-    context.strokeStyle = selected ? "rgba(79, 195, 177, 1)" : "rgba(79, 195, 177, 0.58)";
+    context.strokeStyle = selected ? "rgba(245, 247, 248, 1)" : "rgba(245, 247, 248, 0.58)";
     context.beginPath();
     context.moveTo(x, height * 0.12);
     context.lineTo(x, height);
     context.stroke();
     if (selected) {
-      context.fillStyle = "rgba(79, 195, 177, 0.90)";
+      context.fillStyle = "rgba(245, 247, 248, 0.92)";
       context.fillRect(x - 3 * ratio, height * 0.1, 6 * ratio, 6 * ratio);
     }
   });
@@ -2579,10 +3278,16 @@ function trainingReviewCueTimes() {
 }
 
 function trainingReviewFrameTimes() {
-  if (!trainingCapture.frames.length) return [];
-  return trainingCapture.frames
+  const lightFrameTimes = (musicalTimeline.lightFrames ?? [])
     .map((frame) => roundNumber(Number(frame.time ?? 0), 4))
-    .filter((time) => Number.isFinite(time))
+    .filter((time) => Number.isFinite(time));
+  if (lightFrameTimes.length) {
+    return [...new Set(lightFrameTimes)].sort((left, right) => left - right);
+  }
+  if (!trainingCapture.frames.length) return [];
+  return [...new Set(trainingCapture.frames
+    .map((frame) => roundNumber(Number(frame.time ?? 0), 4))
+    .filter((time) => Number.isFinite(time)))]
     .sort((left, right) => left - right);
 }
 
@@ -2595,7 +3300,8 @@ function trainingReviewAutomaticCueTimes() {
   const sortedIntervals = intervals.sort((left, right) => left - right);
   const interval = sortedIntervals.length ? sortedIntervals[Math.floor(sortedIntervals.length / 2)] : 0.5;
   for (let time = 0; time <= trainingCapture.duration + interval * 0.5; time += interval) {
-    times.add(roundNumber(clamp(time, 0, trainingCapture.duration), 4));
+    const beatStart = clamp(time, 0, trainingCapture.duration);
+    times.add(roundNumber(beatStart, 4));
   }
   return [...times].sort((left, right) => left - right);
 }
@@ -2607,7 +3313,7 @@ function isSuppressedCueTime(time) {
 }
 
 function snapTrainingReviewTime(rawTime) {
-  const times = [...trainingReviewCueTimes(), ...trainingReviewFrameTimes()];
+  const times = trainingReviewFrameTimes();
   if (!times.length) return clamp(rawTime, 0, trainingCapture.duration);
   const nearest = times.reduce((closest, time) => (
     Math.abs(time - rawTime) < Math.abs(closest - rawTime) ? time : closest
@@ -2662,6 +3368,9 @@ function applyPhaseEnvelope(intensity, state, beatPhase, timingIntent, isPlaying
   if (phaseState.off || timingIntent === "blackout") return 0;
   if (!isPlayingReview) return intensity;
   if (beatPhase === null || beatPhase === undefined) return intensity;
+  if (timingIntent === "single_fixture_three_quarter_hold") {
+    return beatPhase < 0.75 ? intensity : 0;
+  }
   const impulsive = timingIntent === "pulse_first_half"
     || timingIntent === "pulse_second_half"
     || timingIntent === "pulse_full_beat"
@@ -2806,9 +3515,23 @@ function drawComponentLanes(componentLanes, time, options = {}) {
   context.fillRect(0, 0, width, height);
   drawOverviewGrid(context, width, height);
 
-  if (Number.isFinite(time)) {
+  const reviewMode = trainingReviewModeActive();
+  const trainingGraphMode = reviewMode || trainingCapture.active;
+  const liveWindowSeconds = liveSpectrumWindowSeconds();
+  if (Number.isFinite(time) && !trainingGraphMode) {
+    if (liveSpectrumWindowStartedAt === null || time < liveSpectrumWindowStartedAt || time - liveSpectrumWindowStartedAt >= liveWindowSeconds) {
+      componentHistory = [];
+      liveSpectrumWindowStartedAt = time;
+      logEvent(`[spectrum] live window reset seconds=${roundNumber(liveWindowSeconds, 2)}`);
+    }
     componentHistory.push({ time, lanes: componentLanes, beat: Boolean(options.beatPulse) });
-    componentHistory = componentHistory.filter((item) => time - item.time <= componentLaneWindowSeconds);
+    componentHistory = componentHistory.filter((item) => time - item.time <= liveWindowSeconds);
+  } else if (Number.isFinite(time) && trainingCapture.active) {
+    componentHistory.push({ time, lanes: componentLanes, beat: Boolean(options.beatPulse) });
+    componentHistory = componentHistory.filter((item) => time - item.time <= Math.max(trainingCapture.duration || componentLaneWindowSeconds, componentLaneWindowSeconds));
+  } else if (reviewMode) {
+    componentHistory = [];
+    liveSpectrumWindowStartedAt = null;
   }
 
   const laneHeight = height / componentLaneNames.length;
@@ -2829,7 +3552,6 @@ function drawComponentLanes(componentLanes, time, options = {}) {
     vocal: [255, 132, 60],
     other: [245, 247, 248],
   };
-  const reviewMode = trainingReviewModeActive();
   const history = reviewMode
     ? trainingCapture.frames.map((frame) => ({
       time: frame.time,
@@ -2837,13 +3559,13 @@ function drawComponentLanes(componentLanes, time, options = {}) {
       beat: Boolean(frame.rhythm_split?.fastest_component),
     }))
     : componentHistory;
-  const captureDuration = reviewMode ? trainingCapture.duration : componentLaneWindowSeconds;
+  const captureDuration = trainingGraphMode ? trainingCapture.duration : liveWindowSeconds;
   const currentTime = reviewMode ? currentPlaybackTime() : Number.isFinite(time) ? time : history.at(-1)?.time ?? 0;
-  const windowStart = reviewMode ? 0 : currentTime - componentLaneWindowSeconds;
+  const windowStart = trainingGraphMode ? 0 : (liveSpectrumWindowStartedAt ?? currentTime - liveWindowSeconds);
   history.forEach((point, pointIndex) => {
-    const progress = reviewMode
+    const progress = trainingGraphMode
       ? clamp(point.time / Math.max(captureDuration, 0.001), 0, 1)
-      : clamp((point.time - windowStart) / componentLaneWindowSeconds, 0, 1);
+      : clamp((point.time - windowStart) / liveWindowSeconds, 0, 1);
     const pointX = progress * width;
     if (point.beat) {
       context.strokeStyle = "rgba(255, 255, 255, 0.42)";
@@ -2858,9 +3580,9 @@ function drawComponentLanes(componentLanes, time, options = {}) {
       const previous = history[pointIndex - 1];
       const previousValue = clamp(previous?.lanes?.[name] ?? value, 0, 1);
       const previousProgress = previous
-        ? reviewMode
+        ? trainingGraphMode
           ? clamp(previous.time / Math.max(captureDuration, 0.001), 0, 1)
-          : clamp((previous.time - windowStart) / componentLaneWindowSeconds, 0, 1)
+          : clamp((previous.time - windowStart) / liveWindowSeconds, 0, 1)
         : progress;
       const previousX = previousProgress * width;
       const yBase = laneIndex * laneHeight + laneHeight * 0.82;
@@ -2891,15 +3613,26 @@ function updateSpectrumCanvasWidth() {
   const canvas = elements.liveSpectrum;
   const scroller = elements.spectrumScroller;
   if (!canvas || !scroller) return;
-  const reviewMode = trainingReviewModeActive();
-  if (!reviewMode) {
+  const trainingGraphMode = trainingReviewModeActive() || trainingCapture.active;
+  if (!trainingGraphMode) {
     canvas.style.width = "100%";
     return;
   }
   const visibleWidth = scroller.clientWidth || canvas.getBoundingClientRect().width || 980;
-  const pixelsPerSecond = 82;
-  const width = Math.max(visibleWidth, Math.round(trainingCapture.duration * pixelsPerSecond));
+  const width = Math.max(visibleWidth, Math.round(trainingCapture.duration * trainingSpectrumPixelsPerSecond));
   canvas.style.width = `${width}px`;
+}
+
+function liveSpectrumWindowSeconds() {
+  const scroller = elements.spectrumScroller;
+  const canvas = elements.liveSpectrum;
+  const visibleWidth = scroller?.clientWidth || canvas?.getBoundingClientRect().width || 900;
+  return clamp(visibleWidth / liveSpectrumPixelsPerSecond, 5, 10);
+}
+
+function resetSpectrumHistory() {
+  componentHistory = [];
+  liveSpectrumWindowStartedAt = null;
 }
 
 function followSpectrumPlayhead(currentTime, duration) {
@@ -2923,27 +3656,18 @@ function drawTrainingCueMarkers(context, width, height, ratio, duration, current
   frameTimes.forEach((time) => {
     const x = clamp(time / Math.max(duration, 0.001), 0, 1) * width;
     const selected = Number.isFinite(currentTime) && Math.abs(time - currentTime) <= currentThreshold;
-    context.strokeStyle = selected ? "rgba(79, 195, 177, 0.95)" : "rgba(79, 195, 177, 0.30)";
+    context.strokeStyle = selected ? "rgba(245, 247, 248, 0.95)" : "rgba(245, 247, 248, 0.34)";
     context.lineWidth = selected ? Math.max(1, 1.8 * ratio) : Math.max(1, ratio);
     context.beginPath();
     context.moveTo(x, 0);
     context.lineTo(x, height);
     context.stroke();
     if (selected) {
-      context.fillStyle = "rgba(79, 195, 177, 0.90)";
+      context.fillStyle = "rgba(245, 247, 248, 0.92)";
       context.beginPath();
       context.arc(x, height - 7 * ratio, Math.max(3, 3.4 * ratio), 0, Math.PI * 2);
       context.fill();
     }
-  });
-  trainingReviewAutomaticCueTimes().filter((time) => !isSuppressedCueTime(time)).forEach((time) => {
-    const x = clamp(time / Math.max(duration, 0.001), 0, 1) * width;
-    context.strokeStyle = "rgba(255, 255, 255, 0.16)";
-    context.lineWidth = Math.max(1, ratio);
-    context.beginPath();
-    context.moveTo(x, 0);
-    context.lineTo(x, height);
-    context.stroke();
   });
   trainingCapture.cues.forEach((cue) => {
     const x = clamp(cue.time / Math.max(duration, 0.001), 0, 1) * width;
@@ -3552,7 +4276,7 @@ function beginTrainingCapture(source) {
   if (elements.spectrumScroller) {
     elements.spectrumScroller.scrollLeft = 0;
   }
-  componentHistory = [];
+  resetSpectrumHistory();
   trainingReviewAuditedAfterCapture = false;
   trainingCapture = {
     active: true,
@@ -3626,8 +4350,10 @@ function captureTrainingFrame(reading) {
   const componentLanes = normalizeComponentLanes(reading.component_lanes);
   const sceneCategory = sceneCategoryForSample(category, sceneChanged);
   const trend = energyTrend(reading.energy_delta ?? ((reading.energy ?? 0) - previousEnergy));
-  const timingIntent = timingIntentForSample(category, sceneCategory, reading.energy ?? 0, trend);
-  const lightingIntent = lightingIntentForSample(category, sceneCategory, reading.energy ?? 0, trend);
+  const rawTimingIntent = timingIntentForSample(category, sceneCategory, reading.energy ?? 0, trend);
+  const rigCapacity = rigCapacityForLightCount(lights.length || Number(elements.lightCount?.value ?? 1));
+  const timingIntent = timingIntentForRig(rawTimingIntent, { category, energy: reading.energy ?? 0, strong: category === "high_energy_drop" }, rigCapacity);
+  const lightingIntent = lightingIntentForRig(lightingIntentForSample(category, sceneCategory, reading.energy ?? 0, trend), timingIntent);
   const frame = {
     time,
     source: trainingCapture.source ?? inputMode,
@@ -3837,6 +4563,7 @@ function logManualOverrideMissing(time, fallback) {
 function interpolatedTrainingSnapshot(previousFrame, nextFrame, time) {
   const previousSnapshot = frameSnapshot(previousFrame);
   if (!Array.isArray(previousSnapshot)) return null;
+  if (previousFrame?.timing_intent === "single_fixture_three_quarter_hold") return previousSnapshot;
   const nextSnapshot = frameSnapshot(nextFrame);
   if (!Array.isArray(nextSnapshot) || !nextFrame || nextFrame.time <= previousFrame.time) {
     return previousSnapshot;
@@ -4129,30 +4856,54 @@ function deepCopyLightSnapshot(snapshot) {
   return JSON.parse(JSON.stringify(snapshot));
 }
 
+function blackoutSnapshotFrom(snapshot) {
+  const source = Array.isArray(snapshot) && snapshot.length ? snapshot : lightStates;
+  const blackoutIndex = trainingColors.findIndex((color) => color.blackout);
+  return source.map((state, index) => normalizeLightState({
+    ...state,
+    enabled: false,
+    intensity: 0,
+    colorMode: "off",
+    blackout: true,
+    phaseMode: "off",
+    phaseFirstHalf: false,
+    phaseSecondHalf: false,
+    lightingIntent: "blackout",
+    timingIntent: "blackout",
+    manualColorIndex: blackoutIndex,
+    manualRandomColor: null,
+  }, { index, timingIntent: "blackout" }));
+}
+
 function cycleTrainingLight(index, direction = 1) {
   if (!canEditTrainingScene()) return;
   const state = lightStates[index];
   if (!state) return;
   const previousPhaseMode = phaseModeForState(state);
+  const restorePhaseMode = previousPhaseMode === "off" ? "full_beat" : previousPhaseMode;
   const currentIndex = state.manualColorIndex === null || state.manualColorIndex === undefined
     ? (direction > 0 ? -1 : 0)
     : state.manualColorIndex;
   const nextIndex = (currentIndex + direction + trainingColors.length) % trainingColors.length;
+  const nextColor = trainingColors[nextIndex];
   state.manualColorIndex = nextIndex;
   state.manualRandomColor = null;
-  if (trainingColors[nextIndex].blackout) {
+  if (nextColor.blackout) {
     setLightOffForScene(state);
   } else {
     state.enabled = true;
-    state.colorMode = trainingColors[nextIndex].name === "casual" ? "random" : "manual";
+    state.colorMode = nextColor.name === "casual" ? "random" : "manual";
+    if (nextColor.name === "casual") {
+      state.manualRandomColor = stableCasualColor({ index, colorIndex: nextIndex, time: currentPlaybackTime() });
+    }
     state.blackout = false;
     state.intensity = 1;
     if (state.timingIntent === "blackout") state.timingIntent = "sustain";
     if (state.lightingIntent === "blackout") state.lightingIntent = "sustain";
-    const previousHalves = phaseHalvesForMode(previousPhaseMode);
+    const previousHalves = phaseHalvesForMode(restorePhaseMode);
     state.phaseFirstHalf = previousHalves.first;
     state.phaseSecondHalf = previousHalves.second;
-    state.phaseMode = previousPhaseMode;
+    state.phaseMode = restorePhaseMode;
   }
   state.timingIntent = timingIntentForLightState(state);
   renderLights();
@@ -4505,6 +5256,27 @@ function updateOutputMode() {
   const selected = elements.outputTarget.options[elements.outputTarget.selectedIndex].text;
   elements.outputLabel.textContent = selected;
   document.body.classList.toggle("output-timeline", elements.outputTarget.value === "timeline_json");
+  document.body.classList.toggle("output-qlc-web", elements.outputTarget.value === "qlc_web_bridge");
+}
+
+function resetQlcWebOutputState(reason = "config") {
+  lastQlcWebSceneKey = "";
+  qlcWebBlackoutSent = false;
+  lastQlcPhysicalColorKey = "";
+  lastQlcPhysicalPhaseMode = "";
+  lastQlcPhysicalColorAt = 0;
+  lastQlcHeldLogAt = 0;
+  lastQlcSmoothModeLog = "";
+  lastQlcCapacityColorKey = "";
+  lastQlcCapacityColorAt = 0;
+  lastQlcCapacitySceneCategory = "";
+  lastQlcCapacitySelectedIntent = "";
+  lastQlcCapacityIntensity = 0;
+  lastQlcCapacityLogAt = 0;
+  if (qlcWebBridgeActive()) {
+    console.log(`[qlc-web] reset output state reason=${reason}`);
+    renderLights();
+  }
 }
 
 async function refreshAudioDevices() {
@@ -4643,7 +5415,7 @@ async function startLiveAudio() {
   elements.trackLabel.textContent = "Audio Device";
   setState("Audio Device listening");
   logEvent("audio device live");
-  componentHistory = [];
+  resetSpectrumHistory();
   beginTrainingCapture("python_live_audio");
   liveEventSource.onmessage = (event) => {
     handleLiveAudioFrame(JSON.parse(event.data));
@@ -4676,6 +5448,7 @@ function stopLiveAudio(resetUi = true) {
     stopTrainingCapture("stopped");
     resetModeVisualState(resetUi ? "pause" : "live_start");
     updateTrainingEditState();
+    maybeSendQlcWebBlackout();
   }
 }
 
@@ -4712,7 +5485,7 @@ async function startDeviceInput() {
   elements.trackLabel.textContent = "Mic Device";
   setState("Listening");
   await refreshAudioDevices();
-  componentHistory = [];
+  resetSpectrumHistory();
   beginTrainingCapture("mic_device");
   animate();
   logEvent("mic device live");
@@ -4742,6 +5515,7 @@ function stopDeviceInput(resetUi = true) {
     stopTrainingCapture("stopped");
     resetModeVisualState(resetUi ? "pause" : "live_start");
     updateTrainingEditState();
+    maybeSendQlcWebBlackout();
   }
 }
 
@@ -4893,29 +5667,69 @@ window.addEventListener("resize", () => {
 });
 
 elements.outputTarget.addEventListener("change", () => {
+  const previousOutputTarget = activeOutputTarget;
+  activeOutputTarget = elements.outputTarget.value;
   updateOutputMode();
+  if (previousOutputTarget === "qlc_web_bridge" && activeOutputTarget !== "qlc_web_bridge") {
+    sendQlcWebBlackout();
+  }
+  if (activeOutputTarget === "qlc_web_bridge") {
+    resetQlcWebOutputState("output_selected");
+  }
   logEvent(`output ${elements.outputLabel.textContent}`);
+});
+
+elements.qlcProfile?.addEventListener("change", () => {
+  logEvent(`qlc profile ${elements.qlcProfile.value}`);
+  resetQlcWebOutputState("profile_change");
+});
+
+elements.qlcFixtureCapacity?.addEventListener("change", () => {
+  logEvent(`qlc fixture capacity ${elements.qlcFixtureCapacity.value}`);
+  resetQlcWebOutputState("fixture_capacity_change");
+});
+
+elements.qlcPalette?.addEventListener("change", () => {
+  logEvent(`qlc palette ${elements.qlcPalette.value}`);
+  resetQlcWebOutputState("palette_change");
+});
+
+elements.qlcSmooth?.addEventListener("change", () => {
+  logEvent(`qlc smooth ${elements.qlcSmooth.value}`);
+  resetQlcWebOutputState("smooth_change");
 });
 
 elements.genreProfile.addEventListener("change", () => {
   logEvent(`genre ${elements.genreProfile.value}`);
 });
 
-elements.lightCount.addEventListener("change", () => {
+function applyLightCountSetting() {
   const oldCount = lights.length;
   const newCount = clamp(Math.round(Number(elements.lightCount.value)), 1, 32);
+  const oldQlcCapacity = qlcFixtureCapacityValue();
+  if (oldCount === newCount) {
+    elements.lightCount.value = String(newCount);
+    syncQlcFixtureCapacity(newCount);
+    return;
+  }
   buildLights(Number(elements.lightCount.value), false);
-  if (oldCount !== newCount) {
-    const overrideCount = Object.keys(trainingCapture.manualOverridesByKey ?? {}).length;
-    if (overrideCount) {
-      logEvent(`[manual-override] skipped incompatible snapshot count=${overrideCount} old=${oldCount} new=${newCount}`);
-    }
-    trainingCapture.manualOverridesByKey = {};
-    logEvent(`[layout] light count changed old=${oldCount} new=${newCount}`);
+  const newQlcCapacity = qlcFixtureCapacityValue();
+  const overrideCount = Object.keys(trainingCapture.manualOverridesByKey ?? {}).length;
+  if (overrideCount) {
+    logEvent(`[manual-override] skipped incompatible snapshot count=${overrideCount} old=${oldCount} new=${newCount}`);
+  }
+  trainingCapture.manualOverridesByKey = {};
+  logEvent(`[layout] light count changed old=${oldCount} new=${newCount}`);
+  if (oldQlcCapacity !== newQlcCapacity) {
+    logEvent(`qlc fixture capacity auto ${newQlcCapacity}`);
+    resetQlcWebOutputState("fixture_capacity_auto");
   }
   resetModeVisualState("layout");
   logEvent(`lights ${elements.lightCount.value}`);
-});
+}
+
+elements.lightCount.addEventListener("input", applyLightCountSetting);
+elements.lightCount.addEventListener("change", applyLightCountSetting);
 
 elements.differentiation.addEventListener("input", () => {
   elements.differentiationValue.textContent = elements.differentiation.value;

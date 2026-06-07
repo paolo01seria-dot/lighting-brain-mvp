@@ -44,6 +44,14 @@ const trainingSpectrumPixelsPerSecond = 150;
 const qlcBridgeUrl = "http://127.0.0.1:8791";
 const qlcWebMinIntervalMs = 50;
 const qlcMinHoldMs = 120;
+const qlcPhysicalFixtureIds = [
+  "fixture_001",
+  "fixture_009",
+  "fixture_017",
+  "fixture_025",
+  "fixture_034",
+  "fixture_041",
+];
 const qlcAllowedPalettes = {
   primary_rgb_test: {
     red: [255, 0, 0],
@@ -2353,16 +2361,25 @@ function applyQlcSmoothing(scene, candidate) {
   return { scene, held: false };
 }
 
-function sendQlcWebScene(candidate) {
-  if (!qlcWebBridgeActive()) return;
+function qlcFixtureIdForVirtualLight(index) {
+  if (index === null || index === undefined) return null;
+  return qlcPhysicalFixtureIds[Number(index)] ?? null;
+}
+
+function qlcSceneForCandidate(candidate) {
   const mappedColor = mapQlcColor(candidate.rgb, candidate);
   const safeIntensity = clamp(Number(candidate.intensity ?? 0), 0, 1);
-  const scene = {
+  return {
     r: mappedColor.rgb[0],
     g: mappedColor.rgb[1],
     b: mappedColor.rgb[2],
     intensity: roundNumber(safeIntensity, 3),
   };
+}
+
+function sendQlcWebScene(candidate) {
+  if (!qlcWebBridgeActive()) return;
+  const scene = qlcSceneForCandidate(candidate);
   const capacityLimited = applyQlcFixtureCapacity(scene, candidate);
   if (capacityLimited.held) return;
   if (!capacityLimited.scene) return;
@@ -2390,6 +2407,34 @@ function sendQlcWebScene(candidate) {
   });
 }
 
+function sendQlcWebMultiScene(candidates) {
+  if (!qlcWebBridgeActive()) return;
+  const fixtures = {};
+  qlcPhysicalFixtureIds.forEach((fixtureId) => {
+    fixtures[fixtureId] = { r: 0, g: 0, b: 0, intensity: 0 };
+  });
+  candidates.forEach((candidate) => {
+    const fixtureId = candidate.fixtureId ?? qlcFixtureIdForVirtualLight(candidate.index);
+    if (!fixtureId || !fixtures[fixtureId]) return;
+    fixtures[fixtureId] = qlcSceneForCandidate(candidate);
+  });
+  const key = JSON.stringify(fixtures);
+  const now = performance.now();
+  if (key === lastQlcWebSceneKey) return;
+  if (now - lastQlcWebSendAt < qlcWebMinIntervalMs) return;
+  lastQlcWebSceneKey = key;
+  lastQlcWebSendAt = now;
+  qlcWebBlackoutSent = Object.values(fixtures).every((scene) => (
+    scene.r === 0 && scene.g === 0 && scene.b === 0 && scene.intensity === 0
+  ));
+  console.log(`[qlc-web] send multi scene fixtures=${Object.keys(fixtures).join(",")}`);
+  Object.entries(fixtures).forEach(([fixtureId, scene]) => {
+    console.log(`[qlc-web] ${fixtureId} rgb=(${scene.r},${scene.g},${scene.b}) intensity=${scene.intensity}`);
+  });
+  console.log("[qlc-web] POST /scene");
+  postQlcWeb("/scene", { fixtures });
+}
+
 function renderLights() {
   const playingReview = Boolean(reviewAnimationFrame);
   const liveListening = isPlaying && (inputMode === "mic_device" || inputMode === "system_audio");
@@ -2399,6 +2444,7 @@ function renderLights() {
   const reviewTime = phaseAnimatedMode ? currentPlaybackTime() : trainingCapture.reviewTime ?? currentPlaybackTime();
   const beatPhase = phaseAnimatedMode ? currentBeatPhaseAt(reviewTime).phase : null;
   let selectedVirtualLight = null;
+  const qlcSceneCandidates = [];
   lights.forEach((light, index) => {
     const state = normalizeLightState(lightStates[index] ?? { intensity: 0, colorIndex: index % colors.length }, { index });
     lightStates[index] = state;
@@ -2419,9 +2465,27 @@ function renderLights() {
     const timingIntent = state.timingIntent ?? timingIntentForLightState(state);
     const effectiveIntensity = lightOff ? 0 : applyPhaseEnvelope(intensity, state, beatPhase, timingIntent, phaseAnimatedMode);
     const visible = effectiveIntensity > 0.04;
+    const qlcFixtureId = qlcFixtureIdForVirtualLight(index);
+    if (qlcFixtureId) {
+      qlcSceneCandidates.push({
+        index,
+        fixtureId: qlcFixtureId,
+        rgb: lightOff || !visible ? [0, 0, 0] : [r, g, b],
+        colorName: lightOff || !visible ? "blackout" : color.name,
+        intensity: lightOff || !visible ? 0 : effectiveIntensity,
+        timingIntent: lightOff || !visible ? "blackout" : timingIntent,
+        lightingIntent: lightOff || !visible ? "blackout" : state.lightingIntent,
+        phaseMode: lightOff || !visible ? "off" : phaseState.phaseMode,
+        sampleCategory: elements.currentSampleCategory?.textContent ?? "",
+        sceneCategory: lastSceneCategory,
+        beatPhase,
+        time: reviewTime,
+      });
+    }
     if (visible && !lightOff) {
       const candidate = {
         index,
+        fixtureId: qlcFixtureId,
         rgb: [r, g, b],
         colorName: color.name,
         intensity: effectiveIntensity,
@@ -2524,7 +2588,9 @@ function renderLights() {
     if (playingReview) reviewPerfDomWrites += 1;
   });
   if (qlcWebBridgeActive()) {
-    if (selectedVirtualLight) {
+    if (qlcFixtureCapacityValue() !== "one_fixture_simple" && qlcSceneCandidates.length) {
+      sendQlcWebMultiScene(qlcSceneCandidates);
+    } else if (selectedVirtualLight) {
       sendQlcWebScene(selectedVirtualLight);
     } else {
       sendQlcWebScene({

@@ -13,36 +13,87 @@ from urllib.parse import urlparse
 DEFAULT_FIXTURES = [
   {
     "id": "fixture_001",
-    "label": "DMX 001 unknown 3ch",
+    "label": "RGB 3CH addr 001",
     "address": 1,
     "channels": 3,
     "map": {"ch1": 1, "ch2": 2, "ch3": 3},
     "rgb": {"r": 1, "g": 2, "b": 3},
     "dimmer": None,
-    "shutter": None,
-    "mode": "rgb_guess",
+    "strobe": None,
+    "mode": None,
   },
   {
     "id": "fixture_009",
-    "label": "DMX 009 unknown 6ch",
+    "label": "RGB 3CH addr 009",
     "address": 9,
-    "channels": 6,
-    "map": {"ch1": 1, "ch2": 2, "ch3": 3, "ch4": 4, "ch5": 5, "ch6": 6},
-    "rgb": {"r": 1, "g": 2, "b": 3},
-    "dimmer": None,
-    "shutter": None,
-    "mode": "unknown_6ch",
-  },
-  {
-    "id": "fixture_017",
-    "label": "DMX 017 unknown 3ch",
-    "address": 17,
     "channels": 3,
     "map": {"ch1": 1, "ch2": 2, "ch3": 3},
     "rgb": {"r": 1, "g": 2, "b": 3},
     "dimmer": None,
-    "shutter": None,
-    "mode": "rgb_guess",
+    "strobe": None,
+    "mode": None,
+  },
+  {
+    "id": "fixture_017",
+    "label": "RGB 6CH addr 017",
+    "address": 17,
+    "channels": 6,
+    "map": {"dimmer": 1, "r": 2, "g": 3, "b": 4, "strobe": 5, "mode": 6},
+    "rgb": {"r": 2, "g": 3, "b": 4},
+    "dimmer": 1,
+    "strobe": 5,
+    "mode": 6,
+  },
+  {
+    "id": "fixture_025",
+    "label": "RGB 6CH addr 025",
+    "address": 25,
+    "channels": 6,
+    "map": {"dimmer": 1, "r": 2, "g": 3, "b": 4, "strobe": 5, "mode": 6},
+    "rgb": {"r": 2, "g": 3, "b": 4},
+    "dimmer": 1,
+    "strobe": 5,
+    "mode": 6,
+  },
+  {
+    "id": "fixture_034",
+    "label": "RGB 6CH addr 034",
+    "address": 34,
+    "channels": 6,
+    "map": {"dimmer": 1, "r": 2, "g": 3, "b": 4, "strobe": 5, "mode": 6},
+    "rgb": {"r": 2, "g": 3, "b": 4},
+    "dimmer": 1,
+    "strobe": 5,
+    "mode": 6,
+    "note": "Physical test: CH33 unused/no effect; use CH34-39.",
+  },
+  {
+    "id": "fixture_041",
+    "label": "Dual RGBW 12CH addr 041",
+    "address": 41,
+    "channels": 12,
+    "map": {
+      "dimmer": 1,
+      "r": 2,
+      "g": 3,
+      "b": 4,
+      "white": 5,
+      "r2": 6,
+      "g2": 7,
+      "b2": 8,
+      "white2": 9,
+      "strobe": 10,
+      "mode": 11,
+      "speed": 12,
+    },
+    "rgb": {"r": 2, "g": 3, "b": 4},
+    "rgb2": {"r": 6, "g": 7, "b": 8},
+    "white": 5,
+    "white2": 9,
+    "dimmer": 1,
+    "strobe": 10,
+    "mode": 11,
+    "speed": 12,
   },
 ]
 
@@ -207,12 +258,26 @@ class QLCWebClient:
       mapping[absolute_channel(fixture, rgb_map["g"])] = green
     if rgb_map.get("b") is not None:
       mapping[absolute_channel(fixture, rgb_map["b"])] = blue
+    rgb2_map = fixture.get("rgb2") or {}
+    if rgb2_map.get("r") is not None:
+      mapping[absolute_channel(fixture, rgb2_map["r"])] = red
+    if rgb2_map.get("g") is not None:
+      mapping[absolute_channel(fixture, rgb2_map["g"])] = green
+    if rgb2_map.get("b") is not None:
+      mapping[absolute_channel(fixture, rgb2_map["b"])] = blue
+    white = fixture.get("white")
+    if white is not None:
+      mapping[absolute_channel(fixture, white)] = 0
+    white2 = fixture.get("white2")
+    if white2 is not None:
+      mapping[absolute_channel(fixture, white2)] = 0
     dimmer = fixture.get("dimmer")
     if dimmer is not None:
       mapping[absolute_channel(fixture, dimmer)] = clamp_dmx(255 * intensity)
-    shutter = fixture.get("shutter")
-    if shutter is not None and intensity > 0:
-      mapping[absolute_channel(fixture, shutter)] = 255
+    for safe_channel in ("strobe", "mode", "speed"):
+      local_channel = fixture.get(safe_channel)
+      if local_channel is not None:
+        mapping[absolute_channel(fixture, local_channel)] = 0
     return self.set_channels(mapping)
 
   def set_fixture_raw(self, fixture_id, values):
@@ -382,7 +447,17 @@ def make_bridge_server(client, host, port):
 
 
 def make_parser():
-  parser = argparse.ArgumentParser(description="Minimal QLC+ Web Interface bridge for DMX testing.")
+  parser = argparse.ArgumentParser(
+    description="Minimal QLC+ Web Interface bridge for DMX testing.",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="""Dry-run examples:
+  PYTHONPATH="$PWD/src" python3 -m lighting_brain.qlc_bridge --dry-run --test blackout
+  PYTHONPATH="$PWD/src" python3 -m lighting_brain.qlc_bridge --dry-run --fixture fixture_017 --rgb 255 0 0
+  PYTHONPATH="$PWD/src" python3 -m lighting_brain.qlc_bridge --dry-run --fixture fixture_025 --rgb 0 255 0
+  PYTHONPATH="$PWD/src" python3 -m lighting_brain.qlc_bridge --dry-run --fixture fixture_034 --rgb 0 0 255
+  PYTHONPATH="$PWD/src" python3 -m lighting_brain.qlc_bridge --dry-run --fixture fixture_041 --rgb 255 255 0
+""",
+  )
   parser.add_argument("--host", default="127.0.0.1")
   parser.add_argument("--port", type=int, default=9999)
   parser.add_argument("--fixture-map", default=None)

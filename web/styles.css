@@ -1052,3 +1052,258 @@ button:disabled {
     gap: 8px;
   }
 }
+
+.setup-dmx-panel,
+.setup-action {
+  display: none;
+}
+
+.setup-light-mode .spectrum-shell,
+.setup-light-mode .review-play-button,
+.setup-light-mode .hidden-seek,
+.setup-light-mode .training-duration-control,
+.setup-light-mode .sample-control,
+.setup-light-mode .range-control,
+.setup-light-mode .source-file-control,
+.setup-light-mode .source-timeline-control,
+.setup-light-mode .device-control,
+.setup-light-mode .audio-device-summary-control,
+.setup-light-mode .training-switch,
+.setup-light-mode .cue-editor,
+.setup-light-mode #currentTimeLabel,
+.setup-light-mode #durationLabel,
+.setup-light-mode label:has(#genreProfile),
+.setup-light-mode #saveAnnotationButton,
+.setup-light-mode #blackoutSceneButton,
+.setup-light-mode #copySceneButton,
+.setup-light-mode #pasteSceneButton,
+.setup-light-mode #downloadAnnotationsButton,
+.setup-light-mode #clearTrainingLightsButton {
+  display: none !important;
+}
+
+.setup-light-mode .setup-dmx-panel {
+  display: grid;
+}
+
+.setup-light-mode .setup-action {
+  display: inline-flex;
+}
+
+.setup-light-phase-fixture-channels #setupSaveButton,
+.setup-light-phase-fixture-channels .setup-dmx-panel {
+  display: none !important;
+}
+
+.setup-light-phase-channel-mapping #setupContinueButton {
+  display: none !important;
+}
+
+.setup-dmx-panel {
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #0d1011;
+}
+
+.setup-dmx-head {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  min-width: 90px;
+  color: var(--text);
+}
+
+.setup-dmx-fader {
+  display: grid;
+  min-width: 70px;
+  justify-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.setup-dmx-fader input {
+  writing-mode: vertical-rl;
+  direction: rtl;
+  width: 28px;
+  height: 86px;
+}
+
+.setup-dmx-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 34px;
+  gap: 3px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px;
+}
+
+.setup-dmx-channel {
+  min-height: 112px;
+  padding: 5px 2px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  background: #121618;
+  color: rgba(237, 242, 244, 0.72);
+  font-size: 10px;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.setup-dmx-channel-owned {
+  border-color: rgba(79, 195, 177, 0.35);
+  background: rgba(79, 195, 177, 0.08);
+}
+
+.setup-dmx-channel-empty {
+  color: rgba(237, 242, 244, 0.28);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.setup-dmx-channel-selected {
+  border-color: rgba(120, 230, 200, 0.9);
+  box-shadow: 0 0 0 1px rgba(120, 230, 200, 0.38), 0 0 18px rgba(79, 195, 177, 0.22);
+}
+
+.setup-channel-label,
+.setup-role-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 9;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-weight: 800;
+  font-size: 17px;
+  line-height: 1;
+  text-shadow: 0 1px 0 #000, 0 -1px 0 #000, 1px 0 0 #000, -1px 0 0 #000, 0 2px 7px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+}
+
+.setup-role-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.setup-top-role-dot {
+  position: absolute;
+  left: 50%;
+  top: -8px;
+  z-index: 10;
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(160, 170, 170, 0.42);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 36% 28%, rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0.06) 38%, rgb(24, 28, 29) 76%),
+    rgb(24, 28, 29);
+  box-shadow:
+    inset 0 1px 3px rgba(255, 255, 255, 0.12),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.65),
+    0 1px 5px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transform: translateX(-50%);
+}
+
+.setup-top-role-dot.is-strobe {
+  background:
+    radial-gradient(circle at 36% 28%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.34) 48%, rgb(230, 235, 240) 78%),
+    rgb(230, 235, 240);
+}
+
+.setup-top-role-dot.is-mode {
+  background: url("assets/casual-color.jpg") center / cover;
+}
+
+.setup-light-mode .phase-button {
+  display: none !important;
+}
+
+.setup-light-mode .light {
+  cursor: grab;
+}
+
+.light.is-off,
+.light.blackout,
+.light.is-off.blackout,
+.flat-bulb .light.is-off,
+.flat-bulb .light.is-off.blackout,
+.flat-bulb .light.blackout,
+.light.is-off.flat-visible,
+.light.is-off.blackout.flat-visible,
+.light.blackout.flat-visible,
+.light.is-off.active,
+.light.is-off.blackout.active,
+.light.blackout.active {
+  background:
+    radial-gradient(circle at 50% 48%,
+      rgba(255, 255, 255, 0.2) 0px,
+      rgba(255, 255, 255, 0.2) 10%,
+      rgba(255, 255, 255, 0.07) 11%,
+      rgba(255, 255, 255, 0.07) 29%,
+      rgba(0, 0, 0, 0.18) 30%,
+      rgba(0, 0, 0, 0.18) 46%,
+      rgba(0, 0, 0, 0) 47%
+    ),
+    radial-gradient(circle at 34% 24%,
+      rgba(255, 255, 255, 0.28),
+      rgba(0, 0, 0, 0) 24%
+    ),
+    linear-gradient(145deg,
+      rgba(255, 255, 255, 0.16),
+      rgba(4, 6, 7, 0.9) 44%,
+      rgba(255, 255, 255, 0.08)
+    ) !important;
+  border: 1px solid rgba(255, 255, 255, 0.20) !important;
+  box-shadow:
+    rgba(255, 255, 255, 0.18) 0px 2px 10px 0px inset,
+    rgba(0, 0, 0, 0.58) 0px -13px 22px 0px inset,
+    rgba(0, 0, 0, 0.46) 0px 5px 17px 0px !important;
+  filter: none !important;
+}
+
+.light.is-off .phase-button.is-off,
+.light.blackout .phase-button.is-off,
+.light.is-off.blackout .phase-button.is-off {
+  background:
+    radial-gradient(circle at 36% 28%,
+      rgba(255, 255, 255, 0.16) 0%,
+      rgba(255, 255, 255, 0.06) 20%,
+      rgba(0, 0, 0, 0) 38%
+    ),
+    radial-gradient(circle at 50% 55%,
+      rgba(30, 34, 35, 0.95) 0%,
+      rgba(8, 9, 10, 0.98) 58%,
+      rgba(0, 0, 0, 1) 100%
+    ) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  box-shadow:
+    inset 0 1px 3px rgba(255, 255, 255, 0.10),
+    inset 0 -5px 8px rgba(0, 0, 0, 0.70),
+    0 0 0 1px rgba(0, 0, 0, 0.55) !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.light.is-off::before,
+.light.blackout::before,
+.light.is-off::after,
+.light.blackout::after {
+  opacity: 0 !important;
+  box-shadow: none !important;
+}
+
+.light.is-off,
+.light.blackout {
+  --beam: transparent !important;
+  --beam-opacity: 0 !important;
+}

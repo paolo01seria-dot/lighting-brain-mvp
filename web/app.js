@@ -97,6 +97,14 @@ const elements = {
   qlcFixtureCapacity: document.querySelector("#qlcFixtureCapacity"),
   qlcPalette: document.querySelector("#qlcPalette"),
   qlcSmooth: document.querySelector("#qlcSmooth"),
+  setupDmxPanel: document.querySelector("#setupDmxPanel"),
+  setupDmxStrip: document.querySelector("#setupDmxStrip"),
+  setupSelectedChannelLabel: document.querySelector("#setupSelectedChannelLabel"),
+  setupChannelValue: document.querySelector("#setupChannelValue"),
+  setupChannelValueLabel: document.querySelector("#setupChannelValueLabel"),
+  setupContinueButton: document.querySelector("#setupContinueButton"),
+  setupSaveButton: document.querySelector("#setupSaveButton"),
+  setupBlackoutButton: document.querySelector("#setupBlackoutButton"),
   genreProfile: document.querySelector("#genreProfile"),
   playButton: document.querySelector("#playButton"),
   stopButton: document.querySelector("#stopButton"),
@@ -250,6 +258,29 @@ let trainingCapture = {
   audioSampleRate: null,
   manualOverridesByKey: {},
 };
+const setupRoleCycle = ["red", "green", "blue", "white", "off"];
+const setupSpecialRoleCycle = ["strobe", "dimmer", "mode", "normal"];
+const setupRoleColors = {
+  red: [255, 76, 91],
+  green: [88, 221, 130],
+  blue: [88, 123, 255],
+  white: [235, 238, 230],
+  off: [0, 0, 0],
+  unknown: [0, 0, 0],
+  strobe: [255, 255, 255],
+  dimmer: [0, 0, 0],
+  mode: [174, 96, 255],
+};
+let setupLastChannelSendAt = 0;
+let setupLightState = {
+  active: false,
+  phase: "fixture_channels",
+  lightCount: 0,
+  fixtures: [],
+  selectedChannel: 1,
+  selectedChannelValue: 255,
+  saved: false,
+};
 
 function buildLights(count, keepPositions = true) {
   const nextCount = clamp(Math.round(count), 1, 32);
@@ -280,6 +311,23 @@ function buildLights(count, keepPositions = true) {
     label.className = "light-label";
     label.textContent = positionName(index);
     light.appendChild(label);
+    const setupChannelLabel = document.createElement("span");
+    setupChannelLabel.className = "setup-channel-label";
+    setupChannelLabel.hidden = true;
+    light.appendChild(setupChannelLabel);
+    const setupRoleLabel = document.createElement("span");
+    setupRoleLabel.className = "setup-role-label";
+    setupRoleLabel.hidden = true;
+    light.appendChild(setupRoleLabel);
+    const setupTopRoleDot = document.createElement("button");
+    setupTopRoleDot.type = "button";
+    setupTopRoleDot.className = "setup-top-role-dot";
+    setupTopRoleDot.hidden = true;
+    setupTopRoleDot.title = "Special channel role";
+    setupTopRoleDot.addEventListener("pointerdown", stopPhaseButtonEvent);
+    setupTopRoleDot.addEventListener("click", cycleSetupSpecialRole);
+    setupTopRoleDot.addEventListener("contextmenu", stopPhaseButtonEvent);
+    light.appendChild(setupTopRoleDot);
     ["first", "second"].forEach((phase) => {
       const phaseButton = document.createElement("button");
       phaseButton.type = "button";
@@ -292,6 +340,7 @@ function buildLights(count, keepPositions = true) {
       light.appendChild(phaseButton);
     });
     light.addEventListener("pointerdown", startDrag);
+    light.addEventListener("click", handleSetupLightClick);
     light.addEventListener("contextmenu", cycleTrainingLightBackward);
     elements.stage.appendChild(light);
     lights.push(light);
@@ -1911,7 +1960,7 @@ function cssRgbTriplet(color) {
 
 function forceLightVisualOff(light) {
   light.classList.remove("active", "phase-split", "flat-visible", "casual");
-  light.classList.add("blackout");
+  light.classList.add("is-off", "blackout");
   light.style.background = "";
   light.style.opacity = "0.82";
   light.style.boxShadow = "";
@@ -2578,6 +2627,7 @@ function renderLights() {
       light.style.removeProperty("--flat-phase-fill");
     }
     light.classList.toggle("active", effectiveIntensity > 0.62);
+    light.classList.remove("is-off");
     light.classList.toggle("manual", manual);
     light.classList.toggle("casual", manualCasual && !lightOff);
     light.classList.toggle("phase-split", phaseSplit);
@@ -2587,7 +2637,7 @@ function renderLights() {
     applyPhaseButtonVisual(rightPhaseButton, phaseButtonState.second);
     if (playingReview) reviewPerfDomWrites += 1;
   });
-  if (qlcWebBridgeActive()) {
+  if (qlcWebBridgeActive() && !setupLightState.active) {
     if (qlcFixtureCapacityValue() !== "one_fixture_simple" && qlcSceneCandidates.length) {
       sendQlcWebMultiScene(qlcSceneCandidates);
     } else if (selectedVirtualLight) {
@@ -5260,6 +5310,9 @@ async function toggleTransport() {
 
 function setInputMode(mode) {
   pauseTrainingReviewPlayback();
+  if (inputMode === "setup_light" && mode !== "setup_light") {
+    leaveSetupLightMode();
+  }
   if (inputMode === "timeline" && mode !== "timeline") {
     stopTimelinePlayback({ resetPosition: false, keepLights: true });
   }
@@ -5270,15 +5323,19 @@ function setInputMode(mode) {
   const fileMode = mode === "file";
   const timelineMode = mode === "timeline";
   const liveMode = mode === "system_audio";
+  const setupMode = mode === "setup_light";
   document.body.classList.toggle("is-mic-mode", mode === "mic_device" || liveMode);
   document.body.classList.toggle("mode-file", fileMode);
   document.body.classList.toggle("mode-timeline", timelineMode);
   document.body.classList.toggle("mode-mic_device", mode === "mic_device");
   document.body.classList.toggle("mode-system_audio", liveMode);
+  document.body.classList.toggle("mode-setup_light", setupMode);
   elements.audioFile.disabled = !fileMode;
   elements.audioFile.closest(".file-control").classList.toggle("disabled", !fileMode);
   elements.audioDevice.disabled = mode !== "mic_device" && !liveMode;
-  if (fileMode) {
+  if (setupMode) {
+    enterSetupLightMode();
+  } else if (fileMode) {
     stopDeviceInput();
     setState(hasLoadedAudio() ? "Ready" : "Idle");
     elements.trackLabel.textContent = loadedFileName || "No track loaded";
@@ -5343,6 +5400,355 @@ function resetQlcWebOutputState(reason = "config") {
     console.log(`[qlc-web] reset output state reason=${reason}`);
     renderLights();
   }
+}
+
+function setupFixtureId(index) {
+  return qlcPhysicalFixtureIds[index] ?? `fixture_${String(index + 1).padStart(3, "0")}`;
+}
+
+function ensureSetupLightState() {
+  const count = lights.length || Number(elements.lightCount?.value ?? 1);
+  const previous = new Map(setupLightState.fixtures.map((fixture) => [fixture.index, fixture]));
+  setupLightState.lightCount = count;
+  setupLightState.fixtures = Array.from({ length: count }, (_item, index) => {
+    const old = previous.get(index) ?? {};
+    return {
+      id: old.id ?? setupFixtureId(index),
+      index,
+      label: old.label ?? positionName(index),
+      channelCount: old.channelCount ?? null,
+      startChannel: old.startChannel ?? null,
+      endChannel: old.endChannel ?? null,
+      channels: old.channels ?? {},
+      previousNormalRole: old.previousNormalRole ?? "off",
+      specialStep: old.specialStep ?? -1,
+    };
+  });
+}
+
+function enterSetupLightMode() {
+  stopDeviceInput(false);
+  stopLiveAudio(false);
+  stopPlayback({ resetPosition: false, keepLights: true });
+  pauseTrainingReviewPlayback();
+  if (trainingCapture.active) stopTrainingCapture("setup_light");
+  isPlaying = false;
+  setupLightState.active = true;
+  setupLightState.phase = "fixture_channels";
+  setupLightState.selectedChannel = 1;
+  setupLightState.selectedChannelValue = 255;
+  if (elements.setupChannelValue) elements.setupChannelValue.value = "255";
+  ensureSetupLightState();
+  setState("Setup Light");
+  elements.trackLabel.textContent = "Setup Light";
+  elements.playButton.textContent = "Play";
+  elements.playButton.disabled = true;
+  elements.stopButton.disabled = false;
+  resetSpectrumHistory();
+  renderSetupLightMode();
+  logEvent("[setup-light] start");
+}
+
+function leaveSetupLightMode() {
+  if (!setupLightState.active) return;
+  sendSetupSelectedChannel(0, true);
+  setupLightState.active = false;
+  document.body.classList.remove("setup-light-mode", "setup-light-phase-fixture-channels", "setup-light-phase-channel-mapping");
+  clearSetupLightOverlays();
+}
+
+function renderSetupLightMode() {
+  document.body.classList.toggle("setup-light-mode", setupLightState.active);
+  document.body.classList.toggle("setup-light-phase-fixture-channels", setupLightState.active && setupLightState.phase === "fixture_channels");
+  document.body.classList.toggle("setup-light-phase-channel-mapping", setupLightState.active && setupLightState.phase === "channel_mapping");
+  if (!setupLightState.active) return;
+  ensureSetupLightState();
+  renderLights();
+  if (setupLightState.phase === "fixture_channels") {
+    renderSetupFixtureChannels();
+  } else {
+    layoutSetupFixtures();
+    renderSetupDmxStrip();
+    renderSetupChannelMapping();
+    sendSetupSelectedChannel();
+  }
+}
+
+function clearSetupLightOverlays() {
+  lights.forEach((light) => {
+    light.classList.remove("setup-active-fixture");
+    light.querySelector(".setup-channel-label")?.setAttribute("hidden", "");
+    light.querySelector(".setup-role-label")?.setAttribute("hidden", "");
+    light.querySelector(".setup-top-role-dot")?.setAttribute("hidden", "");
+  });
+}
+
+function renderSetupFixtureChannels() {
+  clearSetupLightOverlays();
+  setupLightState.fixtures.forEach((fixture, index) => {
+    const light = lights[index];
+    if (!light) return;
+    forceLightVisualOff(light);
+    const label = light.querySelector(".setup-channel-label");
+    if (label) {
+      label.hidden = !fixture.channelCount;
+      label.textContent = fixture.channelCount ? String(fixture.channelCount) : "";
+    }
+  });
+  const ready = setupLightState.fixtures.every((fixture) => Number(fixture.channelCount) > 0);
+  if (elements.setupContinueButton) elements.setupContinueButton.disabled = !ready;
+  if (elements.trainingSummary) {
+    elements.trainingSummary.textContent = ready
+      ? "Setup Light: canali pronti"
+      : "Setup Light: clicca un faro e inserisci Ch";
+  }
+}
+
+function layoutSetupFixtures() {
+  let channel = 1;
+  setupLightState.fixtures.forEach((fixture) => {
+    const count = Math.max(1, Math.round(Number(fixture.channelCount ?? 1)));
+    fixture.channelCount = count;
+    fixture.startChannel = channel;
+    fixture.endChannel = channel + count - 1;
+    fixture.channels = fixture.channels ?? {};
+    for (let local = 1; local <= count; local += 1) {
+      const absolute = fixture.startChannel + local - 1;
+      fixture.channels[String(local)] = {
+        absolute,
+        role: fixture.channels[String(local)]?.role ?? "unknown",
+        value: fixture.channels[String(local)]?.value ?? 255,
+      };
+    }
+    channel = fixture.endChannel + 3;
+  });
+}
+
+function setupFixtureForChannel(channel) {
+  return setupLightState.fixtures.find((fixture) => (
+    Number(fixture.startChannel) <= channel && Number(fixture.endChannel) >= channel
+  )) ?? null;
+}
+
+function setupLocalChannelForFixture(fixture, channel = setupLightState.selectedChannel) {
+  if (!fixture) return null;
+  return channel - fixture.startChannel + 1;
+}
+
+function setupChannelRecord(channel = setupLightState.selectedChannel) {
+  const fixture = setupFixtureForChannel(channel);
+  if (!fixture) return { fixture: null, local: null, record: null };
+  const local = setupLocalChannelForFixture(fixture, channel);
+  fixture.channels[String(local)] = fixture.channels[String(local)] ?? { absolute: channel, role: "unknown", value: 255 };
+  fixture.channels[String(local)].absolute = channel;
+  return { fixture, local, record: fixture.channels[String(local)] };
+}
+
+function renderSetupDmxStrip() {
+  const strip = elements.setupDmxStrip;
+  if (!strip) return;
+  if (!strip.dataset.ready) {
+    strip.innerHTML = "";
+    for (let channel = 1; channel <= 512; channel += 1) {
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "setup-dmx-channel";
+      cell.dataset.channel = String(channel);
+      cell.addEventListener("click", () => selectSetupChannel(channel));
+      strip.appendChild(cell);
+    }
+    strip.dataset.ready = "true";
+  }
+  [...strip.children].forEach((cell) => {
+    const channel = Number(cell.dataset.channel);
+    const { fixture, local, record } = setupChannelRecord(channel);
+    cell.classList.toggle("setup-dmx-channel-selected", channel === setupLightState.selectedChannel);
+    cell.classList.toggle("setup-dmx-channel-owned", Boolean(fixture));
+    cell.classList.toggle("setup-dmx-channel-empty", !fixture);
+    cell.textContent = fixture ? `${channel}\n${fixture.index + 1}.${local}\n${record.role}` : `${channel}`;
+  });
+  const selectedCell = strip.querySelector(`[data-channel="${setupLightState.selectedChannel}"]`);
+  selectedCell?.scrollIntoView({ block: "nearest", inline: "center" });
+}
+
+function roleFill(role) {
+  if (role === "off" || role === "unknown") return null;
+  if (role === "strobe" || role === "dimmer" || role === "mode") return "url('assets/casual-color.jpg') center / cover";
+  const rgb = setupRoleColors[role] ?? setupRoleColors.unknown;
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+function renderSetupChannelMapping() {
+  clearSetupLightOverlays();
+  const { fixture, record } = setupChannelRecord();
+  if (elements.setupSelectedChannelLabel) {
+    elements.setupSelectedChannelLabel.textContent = `DMX CH ${String(setupLightState.selectedChannel).padStart(3, "0")}`;
+  }
+  if (elements.setupChannelValueLabel) elements.setupChannelValueLabel.textContent = String(setupLightState.selectedChannelValue);
+  lights.forEach((light, index) => {
+    forceLightVisualOff(light);
+    if (!fixture || fixture.index !== index) return;
+    light.classList.add("setup-active-fixture");
+    const role = record?.role ?? "unknown";
+    const fill = roleFill(role);
+    if (fill) {
+      light.classList.add("flat-visible");
+      light.style.setProperty("--lens-fill", fill);
+      light.style.setProperty("--flat-bulb-fill", fill);
+      const rgb = setupRoleColors[role] ?? setupRoleColors.white;
+      light.style.setProperty("--light-rgb", `${rgb[0]}, ${rgb[1]}, ${rgb[2]}`);
+      light.style.boxShadow = role === "white"
+        ? "0 0 26px rgba(235, 238, 230, 0.34)"
+        : `0 0 28px rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.42)`;
+    }
+    const topDot = light.querySelector(".setup-top-role-dot");
+    if (topDot) {
+      topDot.hidden = false;
+      topDot.classList.toggle("is-strobe", role === "strobe");
+      topDot.classList.toggle("is-mode", role === "mode");
+    }
+    const roleLabel = light.querySelector(".setup-role-label");
+    if (roleLabel) {
+      const special = { strobe: "STROBO", dimmer: "DIMMER", mode: "MODE" }[role];
+      roleLabel.hidden = !special;
+      roleLabel.textContent = special ?? "";
+    }
+  });
+  if (elements.trainingSummary) {
+    elements.trainingSummary.textContent = fixture
+      ? `Setup Light: fixture ${fixture.index + 1}, local CH ${setupLocalChannelForFixture(fixture)}, role ${record?.role ?? "unknown"}`
+      : "Setup Light: canale vuoto/spacer";
+  }
+}
+
+function selectSetupChannel(channel) {
+  setupLightState.selectedChannel = clamp(Math.round(Number(channel)), 1, 512);
+  if (elements.setupChannelValue) {
+    setupLightState.selectedChannelValue = clamp(Number(elements.setupChannelValue.value), 0, 255);
+  }
+  renderSetupLightMode();
+}
+
+function sendSetupSelectedChannel(value = setupLightState.selectedChannelValue, force = false) {
+  if (!setupLightState.active || setupLightState.phase !== "channel_mapping") return;
+  if (!qlcWebBridgeActive()) return;
+  const now = performance.now();
+  if (!force && now - setupLastChannelSendAt < 45) return;
+  setupLastChannelSendAt = now;
+  const address = clamp(Number(setupLightState.selectedChannel), 1, 512);
+  const safeValue = clamp(Number(value), 0, 255);
+  console.log(`[setup-light] POST /channel address=${address} value=${safeValue}`);
+  postQlcWeb("/channel", { address, value: safeValue });
+}
+
+function promptSetupChannelCount(index) {
+  const fixture = setupLightState.fixtures[index];
+  if (!fixture) return;
+  const current = fixture.channelCount ?? "";
+  const answer = window.prompt(`Ch: fixture ${index + 1}`, current);
+  if (answer === null) return;
+  const count = Math.round(Number(answer));
+  if (!Number.isFinite(count) || count <= 0) return;
+  fixture.channelCount = clamp(count, 1, 64);
+  setupLightState.saved = false;
+  renderSetupLightMode();
+}
+
+function cycleSetupNormalRole() {
+  const { fixture, record } = setupChannelRecord();
+  if (!fixture || !record) return;
+  if (["strobe", "dimmer", "mode"].includes(record.role)) return;
+  const current = setupRoleCycle.includes(record.role) ? setupRoleCycle.indexOf(record.role) : -1;
+  record.role = setupRoleCycle[(current + 1) % setupRoleCycle.length];
+  record.value = setupLightState.selectedChannelValue;
+  fixture.previousNormalRole = record.role;
+  setupLightState.saved = false;
+  renderSetupLightMode();
+}
+
+function handleSetupLightClick(event) {
+  if (!setupLightState.active) return;
+  const light = event.currentTarget;
+  const index = Number(light.dataset.index);
+  if (setupLightState.phase === "fixture_channels") {
+    event.preventDefault();
+    return;
+  }
+  const { fixture } = setupChannelRecord();
+  if (!fixture || fixture.index !== index) return;
+  event.preventDefault();
+  cycleSetupNormalRole();
+}
+
+function cycleSetupSpecialRole(event) {
+  if (!setupLightState.active || setupLightState.phase !== "channel_mapping") return;
+  event.preventDefault();
+  event.stopPropagation();
+  const { fixture, record } = setupChannelRecord();
+  if (!fixture || !record) return;
+  if (!["strobe", "dimmer", "mode"].includes(record.role)) {
+    fixture.previousNormalRole = record.role && record.role !== "unknown" ? record.role : fixture.previousNormalRole ?? "off";
+    fixture.specialStep = -1;
+  }
+  fixture.specialStep = (Number(fixture.specialStep ?? -1) + 1) % setupSpecialRoleCycle.length;
+  const next = setupSpecialRoleCycle[fixture.specialStep];
+  record.role = next === "normal" ? fixture.previousNormalRole ?? "off" : next;
+  record.value = setupLightState.selectedChannelValue;
+  setupLightState.saved = false;
+  renderSetupLightMode();
+}
+
+function continueSetupLightMapping() {
+  if (!setupLightState.fixtures.every((fixture) => Number(fixture.channelCount) > 0)) return;
+  setupLightState.phase = "channel_mapping";
+  layoutSetupFixtures();
+  setupLightState.selectedChannel = setupLightState.fixtures[0]?.startChannel ?? 1;
+  renderSetupLightMode();
+  logEvent("[setup-light] channel_mapping");
+}
+
+function buildSetupJson() {
+  return {
+    version: 1,
+    created_at: new Date().toISOString(),
+    fixtures: setupLightState.fixtures.map((fixture) => {
+      const channels = Object.entries(fixture.channels)
+        .map(([local, channel]) => ({ local: Number(local), absolute: channel.absolute, role: channel.role }))
+        .sort((left, right) => left.local - right.local);
+      const roles = {};
+      channels.forEach((channel) => {
+        if (!channel.role || channel.role === "unknown" || channel.role === "off") return;
+        roles[channel.role] = channel.absolute;
+      });
+      return {
+        id: fixture.id,
+        index: fixture.index,
+        label: fixture.label,
+        channelCount: fixture.channelCount,
+        startChannel: fixture.startChannel,
+        endChannel: fixture.endChannel,
+        roles,
+        channels,
+      };
+    }),
+  };
+}
+
+function saveSetupLight() {
+  const payload = buildSetupJson();
+  localStorage.setItem("lightingBrainFixtureSetup", JSON.stringify(payload));
+  setupLightState.saved = true;
+  const channelCount = payload.fixtures.reduce((total, fixture) => total + fixture.channels.length, 0);
+  logEvent(`[setup-light] saved fixtures=${payload.fixtures.length} channels=${channelCount}`);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `lighting-fixture-setup-${Date.now()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function refreshAudioDevices() {
@@ -5623,7 +6029,11 @@ elements.playButton.addEventListener("click", () => {
 });
 
 elements.stopButton.addEventListener("click", () => {
-  if (inputMode === "mic_device") {
+  if (inputMode === "setup_light") {
+    sendSetupSelectedChannel(0, true);
+    maybeSendQlcWebBlackout();
+    setState("Setup Light ready");
+  } else if (inputMode === "mic_device") {
     stopDeviceInput();
     blackoutLights();
   } else if (inputMode === "system_audio") {
@@ -5672,6 +6082,11 @@ document.addEventListener("keydown", (event) => {
   const tagName = event.target?.tagName?.toLowerCase();
   if (["input", "select", "textarea"].includes(tagName) || event.target?.isContentEditable) return;
   if (!["ArrowRight", "ArrowLeft"].includes(event.key)) return;
+  if (setupLightState.active && setupLightState.phase === "channel_mapping") {
+    event.preventDefault();
+    selectSetupChannel(setupLightState.selectedChannel + (event.key === "ArrowRight" ? 1 : -1));
+    return;
+  }
   if (!(inputMode === "timeline" || trainingReviewAvailable())) return;
   if (!(musicalTimeline.lightFrames ?? []).length) return;
   event.preventDefault();
@@ -5742,6 +6157,7 @@ elements.outputTarget.addEventListener("change", () => {
   if (activeOutputTarget === "qlc_web_bridge") {
     resetQlcWebOutputState("output_selected");
   }
+  if (setupLightState.active) renderSetupLightMode();
   logEvent(`output ${elements.outputLabel.textContent}`);
 });
 
@@ -5779,6 +6195,10 @@ function applyLightCountSetting() {
     return;
   }
   buildLights(Number(elements.lightCount.value), false);
+  if (setupLightState.active) {
+    ensureSetupLightState();
+    renderSetupLightMode();
+  }
   const newQlcCapacity = qlcFixtureCapacityValue();
   const overrideCount = Object.keys(trainingCapture.manualOverridesByKey ?? {}).length;
   if (overrideCount) {
@@ -5796,6 +6216,20 @@ function applyLightCountSetting() {
 
 elements.lightCount.addEventListener("input", applyLightCountSetting);
 elements.lightCount.addEventListener("change", applyLightCountSetting);
+
+elements.setupContinueButton?.addEventListener("click", continueSetupLightMapping);
+elements.setupSaveButton?.addEventListener("click", saveSetupLight);
+elements.setupBlackoutButton?.addEventListener("click", () => {
+  sendSetupSelectedChannel(0, true);
+  maybeSendQlcWebBlackout();
+});
+elements.setupChannelValue?.addEventListener("input", () => {
+  setupLightState.selectedChannelValue = clamp(Number(elements.setupChannelValue.value), 0, 255);
+  if (elements.setupChannelValueLabel) elements.setupChannelValueLabel.textContent = String(setupLightState.selectedChannelValue);
+  const { record } = setupChannelRecord();
+  if (record) record.value = setupLightState.selectedChannelValue;
+  sendSetupSelectedChannel();
+});
 
 elements.differentiation.addEventListener("input", () => {
   elements.differentiationValue.textContent = elements.differentiation.value;
@@ -5888,6 +6322,15 @@ function stopDrag(event) {
   light.removeEventListener("pointerup", stopDrag);
   light.removeEventListener("pointercancel", stopDrag);
   dragging = null;
+  if (wasClick && Number.isInteger(index) && setupLightState.active) {
+    if (setupLightState.phase === "fixture_channels") {
+      promptSetupChannelCount(index);
+    } else {
+      const { fixture } = setupChannelRecord();
+      if (fixture?.index === index) cycleSetupNormalRole();
+    }
+    return;
+  }
   if (wasClick && Number.isInteger(index) && canEditTrainingScene()) {
     cycleTrainingLight(index);
   }

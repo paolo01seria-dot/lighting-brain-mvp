@@ -118,6 +118,47 @@ Verdetto: interessante piu' avanti, non come primo passo.
 5. Art-Net/sACN adapter solo se serve output piu' diretto.
 6. Valutazione integrazione codice QLC+ dopo aver validato il prodotto.
 
+## Confine DMX interno preparatorio
+
+Il progetto ora puo' preparare un output DMX diretto senza togliere QLC+.
+Il confine pulito e':
+
+```text
+canonical light state / web scene
+-> fixture scene {fixture_id: rgb/intensity}
+-> OutputDriver
+-> 512-channel DMX universe
+-> transport reale o mock
+```
+
+Driver previsti:
+
+- `QlcOutputDriver`: fallback attuale, delega al bridge QLC+.
+- `MockDmxDriver`: universo interno a 512 canali per test/debug.
+- `InternalFtdiDmxDriver`: futuro driver hardware FTDI USB-DMX.
+
+Il primo pezzo implementato e' volutamente solo mock:
+
+- `DmxUniverse.set_channel(channel, value)`
+- `MockDmxDriver.set_fixture_color(fixture_id, r, g, b, intensity)`
+- `MockDmxDriver.set_scene({fixtures: ...})`
+- `MockDmxDriver.blackout()`
+- `MockDmxDriver.serialize()`
+
+La mappa fixture supporta gia':
+
+- RGB 3CH: `r`, `g`, `b`
+- RGB 6CH: `dimmer`, `r`, `g`, `b`, `strobe`, `mode`
+- Dual RGBW 12CH: `dimmer`, `r/g/b/white`, `r2/g2/b2/white2`, `strobe`, `mode`, `speed`
+
+Regole di sicurezza del layer DMX:
+
+- valori sempre clampati a `0..255`;
+- canali validati in `1..512`;
+- `strobe`, `mode`, `speed` restano a `0` in colore RGB normale;
+- i canali white restano a `0` finche' non aggiungiamo una logica white esplicita;
+- QLC+ rimane disponibile come output fallback.
+
 ## Software ponte alternativi
 
 QLC+ e' il primo target, ma non l'unico. FreeStyler puo' essere interessante su

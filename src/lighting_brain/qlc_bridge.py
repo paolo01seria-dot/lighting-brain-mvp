@@ -141,6 +141,17 @@ class QLCWebClient:
     self.timeout = timeout
     self.fixture_by_id = {fixture["id"]: fixture for fixture in self.fixtures}
 
+  def set_fixtures(self, fixtures):
+    if not isinstance(fixtures, list) or not fixtures:
+      raise ValueError("fixture map must contain a non-empty fixtures list")
+    for fixture in fixtures:
+      if "id" not in fixture or "address" not in fixture or "channels" not in fixture:
+        raise ValueError("each fixture needs id, address and channels")
+    self.fixtures = fixtures
+    self.fixture_by_id = {fixture["id"]: fixture for fixture in self.fixtures}
+    print(f"[qlc] fixture map updated fixtures={len(self.fixtures)}")
+    return True
+
   def url_for(self, template, address, value):
     path = template.format(address=address, value=value)
     if path.startswith("http://") or path.startswith("https://"):
@@ -410,6 +421,8 @@ def make_bridge_server(client, host, port):
           )
         elif parsed.path == "/scene":
           ok = client.set_scene(payload)
+        elif parsed.path == "/fixture-map":
+          ok = client.set_fixtures(payload.get("fixtures", payload.get("qlcFixtures", [])))
         else:
           self.send_response(404)
           self.send_cors_headers()

@@ -376,7 +376,7 @@ button:disabled {
 
 .mini-player .live-spectrum {
   width: 100%;
-  height: 132px;
+  height: 168px;
   margin: 0;
   border: 0;
   border-radius: 0;
@@ -396,7 +396,7 @@ button:disabled {
 .spectrum-labels {
   display: grid;
   grid-template-rows: repeat(4, 1fr);
-  height: 132px;
+  height: 168px;
   padding-left: 8px;
   background: rgba(13, 16, 17, 0.38);
   color: rgba(245, 247, 248, 0.76);
@@ -1084,6 +1084,13 @@ button:disabled {
 
 .setup-light-mode .setup-dmx-panel {
   display: grid;
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.setup-light-mode .mini-player {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
 }
 
 .setup-light-mode .setup-action {
@@ -1097,6 +1104,24 @@ button:disabled {
 
 .setup-light-phase-channel-mapping #setupContinueButton {
   display: none !important;
+}
+
+.setup-light-phase-channel-mapping .setup-fixture-channel-control,
+.setup-light-phase-channel-mapping #setupFixtureChannelSaveButton {
+  display: none !important;
+}
+
+.setup-fixture-channel-control {
+  align-items: center;
+  gap: 6px;
+  min-width: 104px;
+  width: 104px;
+}
+
+.setup-fixture-channel-control input {
+  width: 54px;
+  min-height: 34px;
+  padding: 0 8px;
 }
 
 .setup-dmx-panel {
@@ -1132,6 +1157,8 @@ button:disabled {
   direction: rtl;
   width: 28px;
   height: 86px;
+  accent-color: var(--accent);
+  filter: drop-shadow(0 0 6px rgba(79, 195, 177, 0.18));
 }
 
 .setup-dmx-strip {
@@ -1230,6 +1257,13 @@ button:disabled {
 
 .setup-light-mode .light {
   cursor: grab;
+  outline: 1px solid rgba(79, 195, 177, 0.46);
+  outline-offset: 4px;
+}
+
+.setup-light-mode .light.setup-active-fixture {
+  outline-color: rgba(79, 195, 177, 0.9);
+  outline-width: 2px;
 }
 
 .light.is-off,

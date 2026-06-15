@@ -140,10 +140,17 @@ Driver previsti:
 Il primo pezzo implementato e' volutamente solo mock:
 
 - `DmxUniverse.set_channel(channel, value)`
+- `DmxUniverse.get_channel(channel)`
+- `DmxUniverse.snapshot()`
+- `DmxUniverse.get_changed_channels(previous_snapshot)`
 - `MockDmxDriver.set_fixture_color(fixture_id, r, g, b, intensity)`
+- `MockDmxDriver.set_fixture_blackout(fixture_id)`
+- `MockDmxDriver.set_fixture_strobe(fixture_id, value)`
+- `MockDmxDriver.apply_simple_light_state(fixture_id, state)`
 - `MockDmxDriver.set_scene({fixtures: ...})`
 - `MockDmxDriver.blackout()`
 - `MockDmxDriver.serialize()`
+- `MockDmxDriver.active_channel_table()`
 
 La mappa fixture supporta gia':
 
@@ -158,6 +165,15 @@ Regole di sicurezza del layer DMX:
 - `strobe`, `mode`, `speed` restano a `0` in colore RGB normale;
 - i canali white restano a `0` finche' non aggiungiamo una logica white esplicita;
 - QLC+ rimane disponibile come output fallback.
+
+Test manuale sicuro, senza hardware:
+
+```bash
+python3 scripts/dmx_mock_test.py
+```
+
+Questo comando crea un universo mock, accende alcuni fixture mappati, stampa i
+canali DMX attivi e poi fa blackout. Non apre porte USB e non invia DMX reale.
 
 ## Software ponte alternativi
 

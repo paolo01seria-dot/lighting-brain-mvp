@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Any, Protocol
 
 
 DMX_UNIVERSE_SIZE = 512
+DEFAULT_SETUP_LIGHT_CONFIG_PATH = Path("configs/fixture_map.json")
 
 
-DEFAULT_DMX_FIXTURES = [
+SIX_LIGHT_TEST_PRESET = [
   {
     "id": "fixture_001",
     "label": "RGB 3CH addr 001",
@@ -77,6 +80,70 @@ DEFAULT_DMX_FIXTURES = [
 ]
 
 
+def factory_default_fixture_map() -> list[dict[str, Any]]:
+  return deepcopy(SIX_LIGHT_TEST_PRESET)
+
+
+def setup_light_payload_to_fixture_map(payload: dict[str, Any]) -> list[dict[str, Any]]:
+  if isinstance(payload.get("qlcFixtures"), list) and payload["qlcFixtures"]:
+    return deepcopy(payload["qlcFixtures"])
+  fixtures = payload.get("fixtures")
+  if not isinstance(fixtures, list) or not fixtures:
+    raise ValueError("Setup Light payload must contain qlcFixtures or fixtures")
+  converted = []
+  for fixture in fixtures:
+    converted_fixture = {
+      "id": fixture["id"],
+      "label": fixture.get("label", fixture["id"]),
+      "address": fixture.get("startChannel", fixture.get("address")),
+      "channels": fixture.get("channelCount", fixture.get("channels")),
+      "map": {},
+      "rgb": {},
+    }
+    role_counts: dict[str, int] = {}
+    for channel in sorted(fixture.get("channels", []), key=lambda item: int(item.get("local", 0))):
+      role = channel.get("role")
+      local = int(channel.get("local", 0))
+      if not role or role in {"unknown", "off"} or local <= 0:
+        continue
+      role_counts[role] = role_counts.get(role, 0) + 1
+      occurrence = role_counts[role]
+      if role in {"red", "green", "blue"}:
+        key = {"red": "r", "green": "g", "blue": "b"}[role]
+        if occurrence == 1:
+          converted_fixture["rgb"][key] = local
+          converted_fixture["map"][key] = local
+        elif occurrence == 2:
+          converted_fixture.setdefault("rgb2", {})[key] = local
+          converted_fixture["map"][f"{key}2"] = local
+      elif role == "white":
+        key = "white" if occurrence == 1 else "white2"
+        converted_fixture[key] = local
+        converted_fixture["map"][key] = local
+      else:
+        converted_fixture[role] = local
+        converted_fixture["map"][role] = local
+    if not converted_fixture["rgb"]:
+      converted_fixture.pop("rgb")
+    converted.append(converted_fixture)
+  return converted
+
+
+def load_fixture_map(path: str | Path | None = None, fallback_to_preset: bool = True) -> list[dict[str, Any]]:
+  if path is None:
+    path = DEFAULT_SETUP_LIGHT_CONFIG_PATH
+  path = Path(path)
+  if not path.exists():
+    if fallback_to_preset:
+      return factory_default_fixture_map()
+    raise FileNotFoundError(path)
+  with path.open("r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+  if isinstance(payload, list):
+    return deepcopy(payload)
+  return setup_light_payload_to_fixture_map(payload)
+
+
 def clamp_dmx(value: float | int) -> int:
   return max(0, min(255, int(round(float(value)))))
 
@@ -142,6 +209,18 @@ class DmxUniverse:
       self.logger(f"[dmx] CH{channel:03d} {old} -> {value}")
     return True
 
+  def setChannel(self, channel: int, value: float | int) -> bool:
+    return self.set_channel(channel, value)
+
+  def get_channel(self, channel: int) -> int:
+    channel = int(channel)
+    if channel < 1 or channel > self.size:
+      raise ValueError(f"DMX channel out of range: {channel}")
+    return self.channels[channel - 1]
+
+  def getChannel(self, channel: int) -> int:
+    return self.get_channel(channel)
+
   def set_channels(self, mapping: dict[int, float | int]) -> list[ChannelChange]:
     self.last_changes = []
     for channel in sorted(mapping):
@@ -150,6 +229,30 @@ class DmxUniverse:
 
   def blackout(self) -> list[ChannelChange]:
     return self.set_channels({channel: 0 for channel in range(1, self.size + 1)})
+
+  def snapshot(self) -> tuple[int, ...]:
+    return tuple(self.channels)
+
+  def get_changed_channels(self, previous_snapshot) -> list[ChannelChange]:
+    previous = list(previous_snapshot)
+    if len(previous) != self.size:
+      raise ValueError(f"snapshot must contain {self.size} channels")
+    return [
+      ChannelChange(channel=index + 1, old=clamp_dmx(previous[index]), new=value)
+      for index, value in enumerate(self.channels)
+      if clamp_dmx(previous[index]) != value
+    ]
+
+  def getChangedChannels(self, previous_snapshot) -> list[ChannelChange]:
+    return self.get_changed_channels(previous_snapshot)
+
+  def active_channel_table(self) -> str:
+    active = [
+      f"CH{index + 1:03d}={value:03d}"
+      for index, value in enumerate(self.channels)
+      if value != 0
+    ]
+    return " ".join(active) if active else "(blackout)"
 
   def serialize(self, include_zero: bool = False) -> dict[str, Any]:
     values = {
@@ -175,6 +278,15 @@ class OutputDriver(Protocol):
   def set_fixture_color(self, fixture_id: str, r: float, g: float, b: float, intensity: float = 1.0) -> Any:
     ...
 
+  def set_fixture_blackout(self, fixture_id: str) -> Any:
+    ...
+
+  def set_fixture_strobe(self, fixture_id: str, value: float | int) -> Any:
+    ...
+
+  def apply_simple_light_state(self, fixture_id: str, state: dict[str, Any]) -> Any:
+    ...
+
   def set_scene(self, scene: dict[str, Any]) -> Any:
     ...
 
@@ -184,12 +296,21 @@ class OutputDriver(Protocol):
 
 class MockDmxDriver:
   def __init__(self, fixtures: list[dict[str, Any]] | None = None, logger=print):
-    self.fixtures = validate_fixture_map(fixtures or DEFAULT_DMX_FIXTURES)
+    self.fixtures = validate_fixture_map(fixtures if fixtures is not None else factory_default_fixture_map())
     self.fixture_by_id = fixture_by_id(self.fixtures)
     self.universe = DmxUniverse(logger=logger)
 
   def set_channel(self, channel: int, value: float | int) -> list[ChannelChange]:
     return self.universe.set_channels({int(channel): value})
+
+  def setChannel(self, channel: int, value: float | int) -> list[ChannelChange]:
+    return self.set_channel(channel, value)
+
+  def get_channel(self, channel: int) -> int:
+    return self.universe.get_channel(channel)
+
+  def getChannel(self, channel: int) -> int:
+    return self.get_channel(channel)
 
   def set_fixture_color(
     self,
@@ -205,6 +326,16 @@ class MockDmxDriver:
     mapping = fixture_rgb_mapping(fixture, r, g, b, intensity)
     return self.universe.set_channels(mapping)
 
+  def setFixtureRgb(
+    self,
+    fixture_id: str,
+    r: float,
+    g: float,
+    b: float,
+    intensity: float = 1.0,
+  ) -> list[ChannelChange]:
+    return self.set_fixture_color(fixture_id, r, g, b, intensity)
+
   def setFixtureColor(self, fixture_id: str, color: dict[str, Any]) -> list[ChannelChange]:
     return self.set_fixture_color(
       fixture_id,
@@ -213,6 +344,65 @@ class MockDmxDriver:
       color.get("b", 0),
       color.get("intensity", 1.0),
     )
+
+  def set_fixture_dual_rgb(
+    self,
+    fixture_id: str,
+    zone1: tuple[float, float, float] | list[float],
+    zone2: tuple[float, float, float] | list[float],
+    intensity: float = 1.0,
+  ) -> list[ChannelChange]:
+    fixture = self.fixture_by_id.get(fixture_id)
+    if not fixture:
+      raise KeyError(f"Unknown fixture: {fixture_id}")
+    mapping = fixture_dual_rgb_mapping(fixture, zone1, zone2, intensity)
+    return self.universe.set_channels(mapping)
+
+  def setFixtureDualRgb(
+    self,
+    fixture_id: str,
+    zone1: tuple[float, float, float] | list[float],
+    zone2: tuple[float, float, float] | list[float],
+    intensity: float = 1.0,
+  ) -> list[ChannelChange]:
+    return self.set_fixture_dual_rgb(fixture_id, zone1, zone2, intensity)
+
+  def set_fixture_blackout(self, fixture_id: str) -> list[ChannelChange]:
+    fixture = self.fixture_by_id.get(fixture_id)
+    if not fixture:
+      raise KeyError(f"Unknown fixture: {fixture_id}")
+    mapping = {
+      absolute_channel(fixture, local): 0
+      for local in range(1, int(fixture["channels"]) + 1)
+    }
+    return self.universe.set_channels(mapping)
+
+  def setFixtureBlackout(self, fixture_id: str) -> list[ChannelChange]:
+    return self.set_fixture_blackout(fixture_id)
+
+  def set_fixture_strobe(self, fixture_id: str, value: float | int) -> list[ChannelChange]:
+    fixture = self.fixture_by_id.get(fixture_id)
+    if not fixture:
+      raise KeyError(f"Unknown fixture: {fixture_id}")
+    strobe = fixture.get("strobe")
+    if strobe is None:
+      return []
+    return self.universe.set_channels({absolute_channel(fixture, strobe): clamp_dmx(value)})
+
+  def setFixtureStrobe(self, fixture_id: str, value: float | int) -> list[ChannelChange]:
+    return self.set_fixture_strobe(fixture_id, value)
+
+  def apply_simple_light_state(self, fixture_id: str, state: dict[str, Any]) -> list[ChannelChange]:
+    if state.get("blackout") or state.get("colorMode") == "off" or state.get("phaseMode") == "off":
+      return self.set_fixture_blackout(fixture_id)
+    rgb = state.get("rgb") or state.get("color") or [state.get("r", 0), state.get("g", 0), state.get("b", 0)]
+    intensity = state.get("intensity", state.get("effectiveIntensity", 1.0))
+    if isinstance(rgb, dict):
+      return self.set_fixture_color(fixture_id, rgb.get("r", 0), rgb.get("g", 0), rgb.get("b", 0), intensity)
+    return self.set_fixture_color(fixture_id, rgb[0], rgb[1], rgb[2], intensity)
+
+  def applySimpleLightState(self, fixture_id: str, state: dict[str, Any]) -> list[ChannelChange]:
+    return self.apply_simple_light_state(fixture_id, state)
 
   def blackout(self) -> list[ChannelChange]:
     return self.universe.blackout()
@@ -247,6 +437,37 @@ class MockDmxDriver:
   def serialize(self, include_zero: bool = False) -> dict[str, Any]:
     return self.universe.serialize(include_zero=include_zero)
 
+  def snapshot(self) -> tuple[int, ...]:
+    return self.universe.snapshot()
+
+  def get_changed_channels(self, previous_snapshot) -> list[ChannelChange]:
+    return self.universe.get_changed_channels(previous_snapshot)
+
+  def getChangedChannels(self, previous_snapshot) -> list[ChannelChange]:
+    return self.get_changed_channels(previous_snapshot)
+
+  def active_channel_table(self) -> str:
+    return self.universe.active_channel_table()
+
+  def print_active_channels(self):
+    print(self.active_channel_table())
+
+  def run_mock_chase(self) -> list[dict[str, Any]]:
+    steps = []
+    self.blackout()
+    steps.append({"step": "blackout", "channels": self.serialize()["channels"]})
+    for fixture_id, color in [
+      ("fixture_001", (255, 0, 0)),
+      ("fixture_009", (0, 255, 0)),
+      ("fixture_017", (0, 0, 255)),
+    ]:
+      self.blackout()
+      self.set_fixture_color(fixture_id, *color)
+      steps.append({"step": fixture_id, "channels": self.serialize()["channels"]})
+    self.blackout()
+    steps.append({"step": "blackout_end", "channels": self.serialize()["channels"]})
+    return steps
+
 
 class QlcOutputDriver:
   def __init__(self, qlc_client):
@@ -257,6 +478,19 @@ class QlcOutputDriver:
 
   def set_fixture_color(self, fixture_id: str, r: float, g: float, b: float, intensity: float = 1.0):
     return self.qlc_client.set_fixture_rgb(fixture_id, r, g, b, intensity)
+
+  def set_fixture_blackout(self, fixture_id: str):
+    fixture = self.qlc_client.fixture(fixture_id)
+    return self.qlc_client.set_fixture_raw(fixture_id, [0] * int(fixture["channels"]))
+
+  def set_fixture_strobe(self, fixture_id: str, value: float | int):
+    return self.qlc_client.set_fixture_channel(fixture_id, "strobe", value)
+
+  def apply_simple_light_state(self, fixture_id: str, state: dict[str, Any]):
+    if state.get("blackout") or state.get("colorMode") == "off" or state.get("phaseMode") == "off":
+      return self.set_fixture_blackout(fixture_id)
+    rgb = state.get("rgb") or [state.get("r", 0), state.get("g", 0), state.get("b", 0)]
+    return self.set_fixture_color(fixture_id, rgb[0], rgb[1], rgb[2], state.get("intensity", 1.0))
 
   def set_scene(self, scene: dict[str, Any]):
     return self.qlc_client.set_scene(scene)
@@ -303,6 +537,40 @@ def fixture_rgb_mapping(
     mapping[absolute_channel(fixture, rgb2["g"])] = green
   if rgb2.get("b") is not None:
     mapping[absolute_channel(fixture, rgb2["b"])] = blue
+  for white_channel in ("white", "white2"):
+    local = fixture.get(white_channel)
+    if local is not None:
+      mapping[absolute_channel(fixture, local)] = 0
+  dimmer = fixture.get("dimmer")
+  if dimmer is not None:
+    mapping[absolute_channel(fixture, dimmer)] = clamp_dmx(255 * intensity)
+  for safe_channel in ("strobe", "mode", "speed"):
+    local = fixture.get(safe_channel)
+    if local is not None:
+      mapping[absolute_channel(fixture, local)] = 0
+  return mapping
+
+
+def fixture_dual_rgb_mapping(
+  fixture: dict[str, Any],
+  zone1: tuple[float, float, float] | list[float],
+  zone2: tuple[float, float, float] | list[float],
+  intensity: float = 1.0,
+) -> dict[int, int]:
+  if not fixture.get("rgb2"):
+    return fixture_rgb_mapping(fixture, zone1[0], zone1[1], zone1[2], intensity)
+  intensity = max(0.0, min(1.0, float(intensity)))
+  mapping: dict[int, int] = {}
+  for rgb_map, values in ((fixture.get("rgb") or {}, zone1), (fixture.get("rgb2") or {}, zone2)):
+    red = clamp_dmx(normalize_color_value(values[0]) * intensity)
+    green = clamp_dmx(normalize_color_value(values[1]) * intensity)
+    blue = clamp_dmx(normalize_color_value(values[2]) * intensity)
+    if rgb_map.get("r") is not None:
+      mapping[absolute_channel(fixture, rgb_map["r"])] = red
+    if rgb_map.get("g") is not None:
+      mapping[absolute_channel(fixture, rgb_map["g"])] = green
+    if rgb_map.get("b") is not None:
+      mapping[absolute_channel(fixture, rgb_map["b"])] = blue
   for white_channel in ("white", "white2"):
     local = fixture.get(white_channel)
     if local is not None:

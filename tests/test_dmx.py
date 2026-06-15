@@ -1,9 +1,36 @@
 import unittest
 
-from lighting_brain.dmx import MockDmxDriver
+from lighting_brain.dmx import DmxUniverse, MockDmxDriver
 
 
 class DmxUniverseTest(unittest.TestCase):
+  def test_channel_values_are_clamped(self):
+    universe = DmxUniverse(logger=None)
+
+    universe.setChannel(1, -20)
+    universe.setChannel(2, 999)
+
+    self.assertEqual(universe.getChannel(1), 0)
+    self.assertEqual(universe.getChannel(2), 255)
+
+  def test_invalid_channel_is_rejected(self):
+    universe = DmxUniverse(logger=None)
+
+    with self.assertRaises(ValueError):
+      universe.setChannel(0, 255)
+    with self.assertRaises(ValueError):
+      universe.getChannel(513)
+
+  def test_snapshot_and_changed_channels(self):
+    universe = DmxUniverse(logger=None)
+    before = universe.snapshot()
+
+    universe.setChannel(1, 12)
+    universe.setChannel(512, 255)
+    changes = universe.getChangedChannels(before)
+
+    self.assertEqual([(change.channel, change.old, change.new) for change in changes], [(1, 0, 12), (512, 0, 255)])
+
   def test_rgb_3ch_fixture_maps_absolute_channels(self):
     driver = MockDmxDriver(logger=None)
 
@@ -45,6 +72,48 @@ class DmxUniverseTest(unittest.TestCase):
     self.assertEqual(all_channels["50"], 0)
     self.assertEqual(all_channels["51"], 0)
     self.assertEqual(all_channels["52"], 0)
+
+  def test_dual_rgbw_fixture_can_drive_two_zones_separately(self):
+    driver = MockDmxDriver(logger=None)
+
+    driver.setFixtureDualRgb("fixture_041", (255, 0, 0), (0, 0, 255))
+    all_channels = driver.serialize(include_zero=True)["channels"]
+
+    self.assertEqual(all_channels["41"], 255)
+    self.assertEqual(all_channels["42"], 255)
+    self.assertEqual(all_channels["43"], 0)
+    self.assertEqual(all_channels["44"], 0)
+    self.assertEqual(all_channels["46"], 0)
+    self.assertEqual(all_channels["47"], 0)
+    self.assertEqual(all_channels["48"], 255)
+
+  def test_fixture_blackout_clears_only_fixture_channels(self):
+    driver = MockDmxDriver(logger=None)
+    driver.set_fixture_color("fixture_001", 255, 255, 255)
+    driver.set_fixture_color("fixture_009", 0, 255, 0)
+
+    driver.setFixtureBlackout("fixture_001")
+    serialized = driver.serialize()
+
+    self.assertNotIn("1", serialized["channels"])
+    self.assertEqual(serialized["channels"]["10"], 255)
+
+  def test_fixture_strobe_sets_supported_strobe_channel(self):
+    driver = MockDmxDriver(logger=None)
+
+    driver.setFixtureStrobe("fixture_017", 300)
+    serialized = driver.serialize()
+
+    self.assertEqual(serialized["channels"]["21"], 255)
+
+  def test_apply_simple_light_state_blackout_and_rgb(self):
+    driver = MockDmxDriver(logger=None)
+
+    driver.applySimpleLightState("fixture_001", {"rgb": [1, 0, 0], "intensity": 0.5})
+    self.assertEqual(driver.serialize()["channels"]["1"], 128)
+    driver.applySimpleLightState("fixture_001", {"phaseMode": "off"})
+
+    self.assertEqual(driver.serialize()["channels"], {})
 
   def test_scene_logs_changes_across_multiple_fixtures(self):
     driver = MockDmxDriver(logger=None)

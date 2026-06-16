@@ -11,6 +11,12 @@ Install desktop dependencies once:
 npm install
 ```
 
+Install the macOS audio routing helper once:
+
+```bash
+brew install switchaudio-osx
+```
+
 Start Electron:
 
 ```bash
@@ -31,11 +37,17 @@ the current beta path for system audio:
 
 - Electron checks for `SwitchAudioSource`.
 - Electron checks for `BlackHole 2ch`.
-- Electron checks for an output named exactly `DMX Multi-Output`.
+- Electron checks for supported Multi-Output device names.
+- Supported names, in priority order:
+  - `DMX Multi-Output`
+  - `Dispositivo con uscite multiple`
 - On **Start System**, Electron automatically switches macOS output to
-  `DMX Multi-Output` when setup is complete.
+  the supported Multi-Output device when setup is complete.
 - On **Stop System** or app quit, Electron restores the previous output if it
   changed it.
+- While the Multi-Output device is active, normal macOS volume keys may not
+  control volume. This limitation is expected only while the app/system is
+  running. Stop System or closing Electron restores the previous normal output.
 
 ## Check
 
@@ -86,7 +98,7 @@ not launch Electron and does not touch audio devices.
 - Automatic QLC+ startup. The QLC bridge remains optional because QLC+ must be
   running separately on `127.0.0.1:9999`.
 - Automatic creation/deletion of Multi-Output Devices. The first-time manual step
-  is still creating `DMX Multi-Output` in Audio MIDI Setup.
+  is still creating a supported Multi-Output Device in Audio MIDI Setup.
 - Any rewrite of the current web UI, training, review, canonical light state, or
   DMX/QLC behavior.
 
@@ -139,8 +151,10 @@ are debug/recovery actions only. They are there for unusual cases, not for the
 normal product flow.
 
 If setup is incomplete, Electron shows guided instructions. The only intended
-first-time manual step is creating `DMX Multi-Output` in Audio MIDI Setup and
-including `BlackHole 2ch` plus the real output device.
+first-time manual step is creating a Multi-Output Device in Audio MIDI Setup and
+including `BlackHole 2ch` plus the real output device. Rename it preferably
+`DMX Multi-Output`; the Italian default `Dispositivo con uscite multiple` is
+also supported.
 
 The current local-server model is transitional. The long-term direction is to
 move services behind app-managed helpers or embedded modules where possible, so

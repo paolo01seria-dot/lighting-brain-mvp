@@ -11,18 +11,23 @@ const ROUTE_STATE = Object.freeze({
   ERROR: "error",
 });
 
+const SUPPORTED_MULTI_OUTPUT_NAMES = Object.freeze([
+  "DMX Multi-Output",
+  "Dispositivo con uscite multiple",
+]);
+
 class MacAudioRouteManager {
   constructor({
     statePath,
     logger = () => {},
     platform = process.platform,
-    desiredOutput = "DMX Multi-Output",
+    supportedOutputs = SUPPORTED_MULTI_OUTPUT_NAMES,
     blackHoleName = "BlackHole 2ch",
   }) {
     this.statePath = statePath;
     this.logger = logger;
     this.platform = platform;
-    this.desiredOutput = desiredOutput;
+    this.supportedOutputs = supportedOutputs;
     this.blackHoleName = blackHoleName;
     this.routeMemory = this.loadState();
     this.status = this.emptyStatus();
@@ -63,17 +68,19 @@ class MacAudioRouteManager {
       || availableOutputs.includes(this.blackHoleName)
       || availableInputs.some((name) => name.includes("BlackHole"))
       || availableOutputs.some((name) => name.includes("BlackHole"));
-    const multiOutputDetected = availableOutputs.includes(this.desiredOutput);
+    const selectedMultiOutputDeviceName = this.selectMultiOutputDevice(availableOutputs);
+    const multiOutputDetected = Boolean(selectedMultiOutputDeviceName);
     const setupComplete = Boolean(blackHoleDetected && multiOutputDetected);
     let routeState = this.routeMemory.routeState || ROUTE_STATE.INACTIVE;
+    const currentOutputIsSupportedRoute = this.isSupportedMultiOutput(currentOutput);
 
-    if (this.routeMemory.changedByElectron && currentOutput === this.desiredOutput) {
+    if (this.routeMemory.changedByElectron && currentOutputIsSupportedRoute) {
       routeState = ROUTE_STATE.ACTIVE;
     } else if (!this.routeMemory.changedByElectron && this.routeMemory.routeState === ROUTE_STATE.RESTORED) {
       routeState = ROUTE_STATE.RESTORED;
     } else if (!setupComplete && this.routeMemory.lastError) {
       routeState = ROUTE_STATE.ERROR;
-    } else if (currentOutput !== this.desiredOutput && routeState !== ROUTE_STATE.RESTORED) {
+    } else if (!currentOutputIsSupportedRoute && routeState !== ROUTE_STATE.RESTORED) {
       routeState = ROUTE_STATE.INACTIVE;
     }
 
@@ -90,6 +97,9 @@ class MacAudioRouteManager {
       availableInputs,
       blackHoleDetected,
       dmxMultiOutputDetected: multiOutputDetected,
+      multiOutputDetected,
+      supportedMultiOutputNames: this.supportedOutputs.slice(),
+      selectedMultiOutputDeviceName,
       changedByElectron: Boolean(this.routeMemory.changedByElectron),
       previousOutput: this.routeMemory.previousOutput || null,
       setupComplete,
@@ -103,7 +113,7 @@ class MacAudioRouteManager {
     if (this.platform !== "darwin") {
       return { ok: false, status, warning: status.lastError };
     }
-    if (!status.switchAudioSourceInstalled || !status.blackHoleDetected || !status.dmxMultiOutputDetected) {
+    if (!status.switchAudioSourceInstalled || !status.blackHoleDetected || !status.multiOutputDetected) {
       this.routeMemory = {
         ...this.routeMemory,
         routeState: ROUTE_STATE.ERROR,
@@ -117,26 +127,29 @@ class MacAudioRouteManager {
         warning: "Legacy route setup incomplete.",
       };
     }
-    if (status.currentOutput === this.desiredOutput) {
+    if (this.isSupportedMultiOutput(status.currentOutput)) {
       this.routeMemory = {
         ...this.routeMemory,
         routeState: ROUTE_STATE.ACTIVE,
         lastError: null,
       };
       this.saveState();
-      this.logger("legacyAudio", `legacy route already active on ${this.desiredOutput}`);
+      this.logger("legacyAudio", `routing already active on: ${status.currentOutput}`);
       return { ok: true, status: await this.refreshStatus() };
     }
 
-    this.routeMemory.previousOutput = status.currentOutput || null;
+    if (!this.routeMemory.previousOutput) {
+      this.routeMemory.previousOutput = status.currentOutput || null;
+      this.logger("legacyAudio", `Saved previous output: ${this.routeMemory.previousOutput || "-"}`);
+    }
     this.routeMemory.changedByElectron = true;
     this.routeMemory.routeState = ROUTE_STATE.ACTIVE;
     this.routeMemory.lastError = null;
     this.saveState();
 
     try {
-      await setSwitchAudioDevice(status.switchAudioSourcePath, "output", this.desiredOutput);
-      this.logger("legacyAudio", `switched macOS output from "${status.currentOutput}" to "${this.desiredOutput}"`);
+      await setSwitchAudioDevice(status.switchAudioSourcePath, "output", status.selectedMultiOutputDeviceName);
+      this.logger("legacyAudio", `Switched output to: ${status.selectedMultiOutputDeviceName}`);
       return { ok: true, status: await this.refreshStatus() };
     } catch (error) {
       this.routeMemory.routeState = ROUTE_STATE.ERROR;
@@ -160,6 +173,14 @@ class MacAudioRouteManager {
     if (!status.switchAudioSourceInstalled) {
       return { ok: false, status, warning: "SwitchAudioSource is missing." };
     }
+    if (!this.routeMemory.changedByElectron) {
+      this.routeMemory.routeState = ROUTE_STATE.RESTORED;
+      this.routeMemory.lastError = null;
+      this.routeMemory.previousOutput = null;
+      this.saveState();
+      this.logger("legacyAudio", `${reason}: restore skipped because Electron did not change output`);
+      return { ok: true, status: await this.refreshStatus() };
+    }
     if (!this.routeMemory.previousOutput) {
       this.routeMemory.changedByElectron = false;
       this.routeMemory.routeState = ROUTE_STATE.RESTORED;
@@ -176,10 +197,22 @@ class MacAudioRouteManager {
       this.logger("legacyAudio", `restore skipped: output already back on "${status.currentOutput}"`);
       return { ok: true, status: await this.refreshStatus() };
     }
+    if (this.routeMemory.changedByElectron && !this.isSupportedMultiOutput(status.currentOutput)) {
+      this.logger(
+        "legacyAudio",
+        `${reason}: output changed manually to "${status.currentOutput}", not forcing restore to "${this.routeMemory.previousOutput}"`,
+      );
+      this.routeMemory.changedByElectron = false;
+      this.routeMemory.routeState = ROUTE_STATE.RESTORED;
+      this.routeMemory.lastError = null;
+      this.routeMemory.previousOutput = null;
+      this.saveState();
+      return { ok: true, status: await this.refreshStatus() };
+    }
 
     try {
       await setSwitchAudioDevice(status.switchAudioSourcePath, "output", this.routeMemory.previousOutput);
-      this.logger("legacyAudio", `${reason}: restored macOS output to "${this.routeMemory.previousOutput}"`);
+      this.logger("legacyAudio", `Restored previous output: ${this.routeMemory.previousOutput}`);
       this.routeMemory.changedByElectron = false;
       this.routeMemory.routeState = ROUTE_STATE.RESTORED;
       this.routeMemory.lastError = null;
@@ -222,6 +255,9 @@ class MacAudioRouteManager {
       availableInputs: [],
       blackHoleDetected: false,
       dmxMultiOutputDetected: false,
+      multiOutputDetected: false,
+      supportedMultiOutputNames: this.supportedOutputs.slice(),
+      selectedMultiOutputDeviceName: null,
       changedByElectron: false,
       previousOutput: null,
       setupComplete: false,
@@ -238,9 +274,13 @@ class MacAudioRouteManager {
     if (status.switchAudioSourceInstalled && !status.blackHoleDetected) {
       instructions.push("Install BlackHole 2ch.");
     }
-    if (status.switchAudioSourceInstalled && !status.dmxMultiOutputDetected) {
+    if (status.switchAudioSourceInstalled && !status.multiOutputDetected) {
       instructions.push(
-        "Open Audio MIDI Setup, click +, create Multi-Output Device, include BlackHole 2ch and your real output, rename it exactly \"DMX Multi-Output\", then return to the app.",
+        "Open Audio MIDI Setup.",
+        "Click +.",
+        "Create Multi-Output Device.",
+        "Include BlackHole 2ch and the real speakers/headphones/output.",
+        "Rename it preferably \"DMX Multi-Output\". The Italian default \"Dispositivo con uscite multiple\" is also supported.",
       );
     }
     return {
@@ -281,6 +321,14 @@ class MacAudioRouteManager {
     fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
     fs.writeFileSync(this.statePath, JSON.stringify(this.routeMemory, null, 2));
   }
+
+  selectMultiOutputDevice(availableOutputs) {
+    return this.supportedOutputs.find((name) => availableOutputs.includes(name)) || null;
+  }
+
+  isSupportedMultiOutput(name) {
+    return Boolean(name && this.supportedOutputs.includes(name));
+  }
 }
 
 async function detectSwitchAudioSource() {
@@ -293,7 +341,7 @@ async function detectSwitchAudioSource() {
 }
 
 async function listSwitchAudioDevices(binaryPath, type) {
-  const output = await execFileAsync(binaryPath, ["-a", "-t", type]);
+  const output = await execFileAsync(binaryPath, ["-t", type, "-a"]);
   return output
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -301,12 +349,12 @@ async function listSwitchAudioDevices(binaryPath, type) {
 }
 
 async function currentSwitchAudioDevice(binaryPath, type) {
-  const output = await execFileAsync(binaryPath, ["-c", "-t", type]);
+  const output = await execFileAsync(binaryPath, ["-t", type, "-c"]);
   return output.trim() || null;
 }
 
 async function setSwitchAudioDevice(binaryPath, type, name) {
-  await execFileAsync(binaryPath, ["-s", name, "-t", type]);
+  await execFileAsync(binaryPath, ["-t", type, "-s", name]);
 }
 
 function execFileAsync(command, args) {
@@ -325,4 +373,5 @@ module.exports = {
   LegacyAudioRouteManager: MacAudioRouteManager,
   MacAudioRouteManager,
   ROUTE_STATE,
+  SUPPORTED_MULTI_OUTPUT_NAMES,
 };

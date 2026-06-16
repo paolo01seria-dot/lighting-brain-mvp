@@ -131,6 +131,19 @@ canonical light state / web scene
 -> transport reale o mock
 ```
 
+La sorgente di verita' futura per la fixture map e' Setup Light. Il payload
+salvato dalla webapp contiene gia' una forma compatibile (`fixtures` e
+`qlcFixtures`), quindi Mock, QLC+ e il futuro FTDI devono consumare la stessa
+mappa caricata da Setup Light invece di duplicare configurazioni.
+
+Il mapping reale testato sui 6 fari vive solo come preset:
+
+- `SIX_LIGHT_TEST_PRESET`
+- `factory_default_fixture_map()`
+
+Questo preset serve per test, demo, primo avvio e fallback. Non deve essere
+interpretato come configurazione finale hardcoded.
+
 Driver previsti:
 
 - `QlcOutputDriver`: fallback attuale, delega al bridge QLC+.
@@ -157,6 +170,13 @@ La mappa fixture supporta gia':
 - RGB 3CH: `r`, `g`, `b`
 - RGB 6CH: `dimmer`, `r`, `g`, `b`, `strobe`, `mode`
 - Dual RGBW 12CH: `dimmer`, `r/g/b/white`, `r2/g2/b2/white2`, `strobe`, `mode`, `speed`
+
+Caricamento previsto:
+
+- `load_fixture_map("configs/fixture_map.json")` per un file salvato in futuro.
+- `setup_light_payload_to_fixture_map(payload)` per usare direttamente il formato
+  prodotto da Setup Light.
+- fallback al preset solo quando non c'e' ancora una mappa utente.
 
 Regole di sicurezza del layer DMX:
 

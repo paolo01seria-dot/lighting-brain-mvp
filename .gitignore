@@ -27,3 +27,6 @@ output/
 
 # Local analysis outputs
 analysis/*.json
+
+# Node / Electron
+node_modules/

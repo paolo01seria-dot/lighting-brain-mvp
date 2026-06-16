@@ -1,0 +1,14 @@
+{
+  "name": "lighting-brain-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lighting Brain MVP webapp with optional Electron desktop scaffold.",
+  "scripts": {
+    "desktop:dev": "electron desktop/main/main.js",
+    "desktop:check": "node desktop/scripts/check.js",
+    "dmx:mock-test": "python3 scripts/dmx_mock_test.py"
+  },
+  "devDependencies": {
+    "electron": "^42.4.0"
+  }
+}

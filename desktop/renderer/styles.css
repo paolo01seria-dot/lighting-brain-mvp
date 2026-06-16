@@ -1,0 +1,254 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #101416;
+  color: #edf2f4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(79, 195, 177, 0.08), transparent 38%),
+    #101416;
+}
+
+button {
+  border: 1px solid rgba(237, 242, 244, 0.16);
+  border-radius: 8px;
+  background: #1d272b;
+  color: #edf2f4;
+  padding: 12px 16px;
+  font: inherit;
+  font-weight: 700;
+}
+
+button:hover {
+  border-color: rgba(79, 195, 177, 0.55);
+}
+
+.debug-button {
+  color: #c9d4d8;
+}
+
+.danger-button {
+  border-color: rgba(255, 139, 150, 0.34);
+  color: #ffd0d4;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.56;
+}
+
+.shell {
+  width: min(1180px, calc(100vw - 48px));
+  margin: 0 auto;
+  padding: 40px 0;
+}
+
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  margin-bottom: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #4fc3b1;
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 8px;
+  font-size: 42px;
+}
+
+h2 {
+  margin-bottom: 16px;
+  font-size: 18px;
+}
+
+.summary {
+  margin-bottom: 0;
+  color: #aab5ba;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.dashboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.panel {
+  border: 1px solid rgba(237, 242, 244, 0.12);
+  border-radius: 8px;
+  background: rgba(13, 17, 19, 0.82);
+  padding: 18px;
+}
+
+.audio-setup-panel {
+  margin-bottom: 18px;
+}
+
+.audio-setup-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+}
+
+.audio-status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.audio-status-row {
+  border: 1px solid rgba(237, 242, 244, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.audio-status-row strong,
+.audio-status-row span {
+  display: block;
+}
+
+.audio-status-row span {
+  margin-top: 6px;
+  color: #c9d4d8;
+}
+
+.audio-setup-block {
+  margin-top: 16px;
+}
+
+.audio-setup-block h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.instruction-list p {
+  margin: 0 0 8px;
+  color: #c9d4d8;
+}
+
+.service-list {
+  display: grid;
+  gap: 10px;
+}
+
+.service {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  border: 1px solid rgba(237, 242, 244, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.service strong,
+.service small {
+  display: block;
+}
+
+.service small {
+  margin-top: 4px;
+  color: #9fa9ae;
+}
+
+.service span {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(237, 242, 244, 0.08);
+  color: #d7e0e3;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.service-running span {
+  background: rgba(79, 195, 177, 0.18);
+  color: #78e8d7;
+}
+
+.service-reused span {
+  background: rgba(255, 196, 87, 0.18);
+  color: #ffd889;
+}
+
+.warning {
+  color: #ffd889;
+}
+
+.service-error span,
+.error {
+  color: #ff8b96;
+}
+
+.logs-panel {
+  min-height: 360px;
+}
+
+.logs-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  color: #9fa9ae;
+}
+
+pre {
+  overflow: auto;
+  min-height: 280px;
+  max-height: 48vh;
+  margin: 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: #070a0b;
+  color: #c9d4d8;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 860px) {
+  .hero,
+  .dashboard {
+    display: block;
+  }
+
+  .audio-status-grid,
+  .audio-setup-header {
+    display: block;
+  }
+
+  .actions,
+  .panel {
+    margin-top: 18px;
+  }
+}

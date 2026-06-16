@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lighting Brain Desktop</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Desktop launcher</p>
+          <h1>Lighting Brain</h1>
+          <p class="summary">Start the local web dashboard and Python live audio service from one place.</p>
+        </div>
+        <div class="actions">
+          <button id="startSystem" type="button">Start System</button>
+          <button id="stopSystem" type="button">Stop System</button>
+          <button id="openDashboard" type="button">Open Dashboard</button>
+          <button id="toggleAudioSetup" type="button">Audio Setup</button>
+          <button id="cleanStale" class="debug-button" type="button">Clean Stale Project Services</button>
+          <button id="openExternal" class="debug-button" type="button">Open in Browser</button>
+          <button id="forceCleanup" class="danger-button" type="button">Force Cleanup Ports (Debug / Emergency)</button>
+        </div>
+      </header>
+
+      <section id="audioSetupPanel" class="panel audio-setup-panel" hidden>
+        <div class="audio-setup-header">
+          <div>
+            <h2>BlackHole Legacy / Beta audio route</h2>
+            <p class="summary">
+              Future native system audio capture will use CoreAudio Tap. Microphone fallback is separate and is not used here as system audio.
+            </p>
+          </div>
+          <div class="actions">
+            <button id="openAudioMidiSetup" type="button">Open Audio MIDI Setup</button>
+          </div>
+        </div>
+
+        <div id="legacyAudioStatus" class="audio-status-grid"></div>
+
+        <div class="audio-setup-block">
+          <h3>Guided Setup</h3>
+          <div id="legacyAudioInstructions" class="instruction-list"></div>
+        </div>
+
+        <div class="audio-setup-block">
+          <h3>Debug / Recovery</h3>
+          <div class="actions">
+            <button id="refreshLegacyAudio" class="debug-button" type="button">Refresh Audio Devices</button>
+            <button id="forceEnableLegacyAudio" class="debug-button" type="button">Force Enable Legacy Routing</button>
+            <button id="restorePreviousOutput" class="debug-button" type="button">Restore Previous Output</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard">
+        <div class="panel">
+          <h2>Services</h2>
+          <div id="serviceList" class="service-list"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Audio Boundary</h2>
+          <div id="audioSources" class="service-list"></div>
+        </div>
+      </section>
+
+      <section class="panel logs-panel">
+        <div class="logs-header">
+          <h2>Logs</h2>
+          <span id="dashboardUrl"></span>
+        </div>
+        <pre id="logs"></pre>
+      </section>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -30,6 +30,11 @@ class DesktopProcessManager {
     this.dashboardUrl = "http://127.0.0.1:8788/web/?v=desktop";
     this.logs = [];
     this.maxLogs = 700;
+    this.startPromise = null;
+    this.stopPromise = null;
+    this.syncPromise = null;
+    this.syncMessage = null;
+    this.syncBlockedUntil = 0;
     this.services = new Map([
       [
         "webFrontend",
@@ -112,6 +117,102 @@ class DesktopProcessManager {
   }
 
   async startSystem({ includeQlcBridge = false } = {}) {
+    if (this.isSyncBlocked()) {
+      this.addLog("system", "Start blocked: refreshing app state after second launch...");
+      return this.getSystemStatus();
+    }
+    if (this.startPromise) {
+      this.addLog("system", "System already starting");
+      return this.startPromise;
+    }
+    if (this.stopPromise) {
+      this.addLog("system", "System already stopping");
+      return this.getSystemStatus();
+    }
+
+    const startPromise = this.performStartSystem({ includeQlcBridge }).finally(() => {
+      if (this.startPromise === startPromise) {
+        this.startPromise = null;
+      }
+    });
+    this.startPromise = startPromise;
+    return startPromise;
+  }
+
+  async stopSystem({ force = false } = {}) {
+    if (this.isSyncBlocked() && !force) {
+      this.addLog("system", "Stop blocked: refreshing app state after second launch...");
+      return this.getSystemStatus();
+    }
+    if (this.stopPromise) {
+      this.addLog("system", "System already stopping");
+      return this.stopPromise;
+    }
+
+    const stopPromise = this.performStopSystem().finally(() => {
+      if (this.stopPromise === stopPromise) {
+        this.stopPromise = null;
+      }
+    });
+    this.stopPromise = stopPromise;
+    return stopPromise;
+  }
+
+  async refreshAfterSecondInstance({ minBlockMs = 250 } = {}) {
+    if (this.syncPromise) {
+      this.addLog("system", "Second-instance refresh already in progress");
+      return this.syncPromise;
+    }
+
+    this.syncMessage = "Refreshing app state after second launch...";
+    this.syncBlockedUntil = Date.now() + minBlockMs;
+    this.addLog("system", this.syncMessage);
+    const syncPromise = (async () => {
+      await this.refreshServiceStatuses();
+      const remainingBlockMs = this.syncBlockedUntil - Date.now();
+      if (remainingBlockMs > 0) {
+        await sleep(remainingBlockMs);
+      }
+      return this.getSystemStatus();
+    })().finally(() => {
+      this.syncPromise = null;
+      this.syncMessage = null;
+      this.syncBlockedUntil = 0;
+    });
+    this.syncPromise = syncPromise;
+    return syncPromise;
+  }
+
+  isSyncBlocked() {
+    return Boolean(this.syncPromise) || Date.now() < this.syncBlockedUntil;
+  }
+
+  async performStartSystem({ includeQlcBridge = false } = {}) {
+    await this.refreshServiceStatuses();
+
+    const webFrontend = this.requireService("webFrontend");
+    const liveAudio = this.requireService("liveAudio");
+    const qlcBridge = this.requireService("qlcBridge");
+    const qlcPlusWeb = this.requireService("qlcPlusWeb");
+
+    if (this.serviceIsStarting(webFrontend) || this.serviceIsStarting(liveAudio)) {
+      this.addLog("system", "System already starting");
+      return this.getSystemStatus();
+    }
+
+    const webHealthy = this.serviceIsHealthy(webFrontend);
+    const liveHealthy = this.serviceIsHealthy(liveAudio);
+    const qlcBridgeHealthy = this.serviceIsHealthy(qlcBridge);
+    const qlcBridgeStarting = this.serviceIsStarting(qlcBridge);
+
+    if (webHealthy && liveHealthy && (!includeQlcBridge || qlcBridgeHealthy || qlcBridgeStarting)) {
+      this.addLog("system", "System already running");
+      if (!this.serviceIsHealthy(qlcPlusWeb)) {
+        await this.refreshExternalService("qlcPlusWeb");
+      }
+      return this.getSystemStatus();
+    }
+
     this.addLog("system", "starting system");
     const startedServiceIds = [];
     try {
@@ -121,15 +222,23 @@ class DesktopProcessManager {
           this.addLog("legacyAudio", routeResult.warning);
         }
       }
-      await this.startService("webFrontend", { startedServiceIds });
-      await this.startService("liveAudio", { startedServiceIds });
-      await this.refreshExternalService("qlcPlusWeb");
-      if (includeQlcBridge) {
-        await this.startService("qlcBridge", { startedServiceIds });
-      } else {
-        await this.refreshOptionalService("qlcBridge");
-        this.addLog("qlcBridge", "optional service not started automatically");
+
+      await this.ensureServiceStarted("webFrontend", { startedServiceIds });
+      await this.ensureServiceStarted("liveAudio", { startedServiceIds });
+
+      if (!this.serviceIsHealthy(qlcPlusWeb)) {
+        await this.refreshExternalService("qlcPlusWeb");
       }
+
+      if (includeQlcBridge) {
+        await this.ensureServiceStarted("qlcBridge", { startedServiceIds });
+      } else if (!qlcBridgeHealthy && !qlcBridgeStarting) {
+        await this.refreshOptionalService("qlcBridge");
+        if (!this.serviceIsHealthy(this.requireService("qlcBridge"))) {
+          this.addLog("qlcBridge", "optional service not started automatically");
+        }
+      }
+
       return this.getSystemStatus();
     } catch (error) {
       this.addLog("system", `start failed: ${error.message}`);
@@ -138,7 +247,7 @@ class DesktopProcessManager {
     }
   }
 
-  async stopSystem() {
+  async performStopSystem() {
     this.addLog("system", "stopping system");
     const services = Array.from(this.services.values()).reverse();
     await Promise.all(services.map((service) => this.stopService(service.id)));
@@ -150,6 +259,28 @@ class DesktopProcessManager {
     }
     await this.refreshExternalService("qlcPlusWeb");
     return this.getSystemStatus();
+  }
+
+  async ensureServiceStarted(id, { startedServiceIds = [] } = {}) {
+    const service = this.requireService(id);
+    if (this.serviceIsStarting(service)) {
+      this.addLog(id, `${service.label} already starting`);
+      return;
+    }
+    if (this.serviceIsHealthy(service)) {
+      this.addLog(id, `${service.label} already running`);
+      return;
+    }
+    await this.startService(id, { startedServiceIds });
+  }
+
+  serviceIsHealthy(service) {
+    return [SERVICE_STATES.RUNNING, SERVICE_STATES.REUSED].includes(service.state)
+      && ![SERVICE_OWNERSHIP.ERROR, SERVICE_OWNERSHIP.STALE_PROJECT_SERVICE].includes(service.ownership);
+  }
+
+  serviceIsStarting(service) {
+    return service.state === SERVICE_STATES.STARTING;
   }
 
   async startService(id, { startedServiceIds = [] } = {}) {
@@ -266,6 +397,9 @@ class DesktopProcessManager {
 
   async refreshOptionalService(id) {
     const service = this.requireService(id);
+    if (service.child && [SERVICE_STATES.STARTING, SERVICE_STATES.RUNNING, SERVICE_STATES.STOPPING].includes(service.state)) {
+      return;
+    }
     const probe = await this.probeService(service);
     if (probe.occupied && probe.expected) {
       service.state = SERVICE_STATES.REUSED;
@@ -415,6 +549,13 @@ class DesktopProcessManager {
   }
 
   async canOpenDashboard() {
+    if (this.isSyncBlocked()) {
+      this.addLog("webFrontend", "Dashboard blocked: app state refresh in progress");
+      return {
+        ok: false,
+        error: "Dashboard blocked: refreshing app state after second launch.",
+      };
+    }
     const service = this.requireService("webFrontend");
     const probe = await this.probeService(service);
     if (probe.expected) {
@@ -463,7 +604,13 @@ class DesktopProcessManager {
 
   getSystemStatus() {
     const services = {};
+    let hasStartingService = false;
+    let hasStoppingService = false;
+    let hasErrorService = false;
     for (const [id, service] of this.services) {
+      if (service.state === SERVICE_STATES.STARTING) hasStartingService = true;
+      if (service.state === SERVICE_STATES.STOPPING) hasStoppingService = true;
+      if (service.state === SERVICE_STATES.ERROR) hasErrorService = true;
       services[id] = {
         id,
         label: service.label,
@@ -482,8 +629,29 @@ class DesktopProcessManager {
         recentLogs: this.logs.filter((entry) => entry.serviceId === id).slice(-12),
       };
     }
+    const requiredHealthy = ["webFrontend", "liveAudio"]
+      .every((id) => services[id]?.healthy === true);
+
+    let systemState = SERVICE_STATES.STOPPED;
+    if (this.isSyncBlocked()) {
+      systemState = "syncing";
+    } else if (this.startPromise || hasStartingService) {
+      systemState = SERVICE_STATES.STARTING;
+    } else if (this.stopPromise || hasStoppingService) {
+      systemState = SERVICE_STATES.STOPPING;
+    } else if (requiredHealthy) {
+      systemState = SERVICE_STATES.RUNNING;
+    } else if (hasErrorService) {
+      systemState = SERVICE_STATES.ERROR;
+    }
+
     return {
       dashboardUrl: this.dashboardUrl,
+      systemState,
+      startInProgress: Boolean(this.startPromise),
+      stopInProgress: Boolean(this.stopPromise),
+      syncInProgress: this.isSyncBlocked(),
+      syncMessage: this.syncMessage,
       services,
     };
   }

@@ -1,6 +1,9 @@
 "use strict";
 
 const api = window.lightingBrainDesktop;
+let uiBusy = false;
+let lastStatus = null;
+let removeSyncListener = null;
 
 const elements = {
   startSystem: document.querySelector("#startSystem"),
@@ -21,6 +24,7 @@ const elements = {
   audioSources: document.querySelector("#audioSources"),
   logs: document.querySelector("#logs"),
   dashboardUrl: document.querySelector("#dashboardUrl"),
+  systemNotice: document.querySelector("#systemNotice"),
 };
 
 elements.toggleAudioSetup.addEventListener("click", () => {
@@ -74,6 +78,18 @@ elements.restorePreviousOutput.addEventListener("click", async () => {
 });
 
 elements.startSystem.addEventListener("click", async () => {
+  const requiredHealthy = lastStatus?.services?.webFrontend?.healthy === true
+    && lastStatus?.services?.liveAudio?.healthy === true;
+  if (uiBusy || lastStatus?.syncInProgress || lastStatus?.systemState === "starting" || lastStatus?.systemState === "stopping" || requiredHealthy) {
+    appendLocalLog(
+      lastStatus?.syncInProgress
+        ? "Start ignored: refreshing app state after second launch..."
+        : requiredHealthy
+          ? "Start ignored: system already running."
+        : "Start ignored: system transition already in progress.",
+    );
+    return;
+  }
   setBusy(true);
   try {
     await api.system.startSystem();
@@ -153,11 +169,14 @@ async function refresh() {
     api.audio.listSources(),
     api.legacyAudio.getStatus(),
   ]);
+  lastStatus = status;
   elements.dashboardUrl.textContent = status.dashboardUrl;
   renderServices(status.services);
   renderAudioSources(audioSources);
   renderLegacyAudioStatus(legacyAudioStatus);
   renderLogs(logs);
+  renderSystemNotice(status);
+  syncActionState();
 }
 
 function renderServices(services) {
@@ -251,17 +270,38 @@ function appendLocalLog(message) {
 }
 
 function setBusy(isBusy) {
-  elements.startSystem.disabled = isBusy;
-  elements.stopSystem.disabled = isBusy;
-  elements.toggleAudioSetup.disabled = isBusy;
-  elements.openAudioMidiSetup.disabled = isBusy;
-  elements.refreshLegacyAudio.disabled = isBusy;
-  elements.forceEnableLegacyAudio.disabled = isBusy;
-  elements.restorePreviousOutput.disabled = isBusy;
-  elements.cleanStale.disabled = isBusy;
-  elements.openDashboard.disabled = isBusy;
-  elements.openExternal.disabled = isBusy;
-  elements.forceCleanup.disabled = isBusy;
+  uiBusy = isBusy;
+  syncActionState();
+}
+
+function syncActionState() {
+  const systemState = lastStatus?.systemState || "stopped";
+  const webHealthy = lastStatus?.services?.webFrontend?.healthy === true;
+  const liveAudioHealthy = lastStatus?.services?.liveAudio?.healthy === true;
+  const requiredHealthy = webHealthy && liveAudioHealthy;
+  const syncInProgress = lastStatus?.syncInProgress === true || systemState === "syncing";
+  const transitionInProgress = systemState === "starting" || systemState === "stopping";
+  const startBlocked = uiBusy || syncInProgress || transitionInProgress || requiredHealthy;
+
+  elements.startSystem.disabled = startBlocked;
+  elements.stopSystem.disabled = uiBusy || syncInProgress;
+  elements.toggleAudioSetup.disabled = uiBusy;
+  elements.openAudioMidiSetup.disabled = uiBusy;
+  elements.refreshLegacyAudio.disabled = uiBusy;
+  elements.forceEnableLegacyAudio.disabled = uiBusy;
+  elements.restorePreviousOutput.disabled = uiBusy;
+  elements.cleanStale.disabled = uiBusy;
+  elements.openDashboard.disabled = uiBusy || syncInProgress || !webHealthy;
+  elements.openExternal.disabled = uiBusy;
+  elements.forceCleanup.disabled = uiBusy;
+}
+
+function renderSystemNotice(status) {
+  const message = status?.syncInProgress
+    ? (status.syncMessage || "Refreshing app state after second launch...")
+    : "";
+  elements.systemNotice.hidden = !message;
+  elements.systemNotice.textContent = message;
 }
 
 function escapeHtml(value) {
@@ -273,6 +313,13 @@ function escapeHtml(value) {
     "'": "&#039;",
   }[char]));
 }
+
+removeSyncListener = api.system.onSyncState((status) => {
+  lastStatus = status;
+  renderServices(status.services);
+  renderSystemNotice(status);
+  syncActionState();
+});
 
 refresh();
 setInterval(refresh, 1500);

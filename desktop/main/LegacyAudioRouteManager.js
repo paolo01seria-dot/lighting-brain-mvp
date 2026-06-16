@@ -11,7 +11,7 @@ const ROUTE_STATE = Object.freeze({
   ERROR: "error",
 });
 
-class LegacyAudioRouteManager {
+class MacAudioRouteManager {
   constructor({
     statePath,
     logger = () => {},
@@ -322,6 +322,7 @@ function execFileAsync(command, args) {
 }
 
 module.exports = {
-  LegacyAudioRouteManager,
+  LegacyAudioRouteManager: MacAudioRouteManager,
+  MacAudioRouteManager,
   ROUTE_STATE,
 };

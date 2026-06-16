@@ -10,12 +10,12 @@ const { WindowsWasapiLoopbackDriver } = require("./audio/drivers/WindowsWasapiLo
 const { MicrophoneFallbackDriver } = require("./audio/drivers/MicrophoneFallbackDriver");
 const { AUDIO_SOURCE_TYPES } = require("./audio/sourceTypes");
 const { DesktopProcessManager } = require("./DesktopProcessManager");
-const { LegacyAudioRouteManager } = require("./LegacyAudioRouteManager");
+const { MacAudioRouteManager } = require("./MacAudioRouteManager");
 
 const singleInstanceLock = app.requestSingleInstanceLock();
 const projectRoot = path.join(__dirname, "../..");
 let processManager = null;
-let legacyAudioRouteManager = null;
+let macAudioRouteManager = null;
 let cleanupInProgress = false;
 let cleanupComplete = false;
 let mainWindow = null;
@@ -65,14 +65,14 @@ function createWindow() {
 }
 
 function registerIpc() {
-  ipcMain.handle("desktop:legacy-audio:get-status", async () => legacyAudioRouteManager.getStatus());
-  ipcMain.handle("desktop:legacy-audio:refresh-status", async () => legacyAudioRouteManager.refreshStatus());
+  ipcMain.handle("desktop:legacy-audio:get-status", async () => macAudioRouteManager.getStatus());
+  ipcMain.handle("desktop:legacy-audio:refresh-status", async () => macAudioRouteManager.refreshStatus());
   ipcMain.handle("desktop:legacy-audio:open-audio-midi-setup", async () => {
-    await legacyAudioRouteManager.openAudioMidiSetup();
-    return legacyAudioRouteManager.refreshStatus();
+    await macAudioRouteManager.openAudioMidiSetup();
+    return macAudioRouteManager.refreshStatus();
   });
-  ipcMain.handle("desktop:legacy-audio:force-enable", async () => legacyAudioRouteManager.forceEnableLegacyRouting());
-  ipcMain.handle("desktop:legacy-audio:restore-previous-output", async () => legacyAudioRouteManager.restorePreviousOutput({ reason: "manual restore" }));
+  ipcMain.handle("desktop:legacy-audio:force-enable", async () => macAudioRouteManager.forceEnableLegacyRouting());
+  ipcMain.handle("desktop:legacy-audio:restore-previous-output", async () => macAudioRouteManager.restorePreviousOutput({ reason: "manual restore" }));
 
   ipcMain.handle("desktop:audio:list-sources", async () => audioManager.listSources());
   ipcMain.handle("desktop:audio:get-status", async () => audioManager.getStatus());
@@ -86,7 +86,12 @@ function registerIpc() {
   });
 
   ipcMain.handle("desktop:system:start", async () => processManager.startSystem());
-  ipcMain.handle("desktop:system:stop", async () => processManager.stopSystem());
+  ipcMain.handle("desktop:system:stop", async () => {
+    closeDashboardWindows("stop system");
+    const status = await processManager.stopSystem();
+    closeDashboardWindows("stop system cleanup");
+    return status;
+  });
   ipcMain.handle("desktop:system:get-status", async () => processManager.getSystemStatus());
   ipcMain.handle("desktop:system:get-logs", async () => processManager.getLogs());
   ipcMain.handle("desktop:system:open-dashboard", async () => {
@@ -112,10 +117,22 @@ if (singleInstanceLock) {
       processManager.addLog("system", "Second instance blocked; focusing existing window");
     }
     focusExistingMainWindow();
+    validateManagedWindows();
+    if (processManager) {
+      notifySystemSyncState();
+      processManager.refreshAfterSecondInstance()
+        .catch((error) => {
+          processManager.addLog("system", `Second-instance refresh failed: ${error.message}`);
+        })
+        .finally(() => {
+          validateManagedWindows();
+          notifySystemSyncState();
+        });
+    }
   });
 
   app.whenReady().then(() => {
-    legacyAudioRouteManager = new LegacyAudioRouteManager({
+    macAudioRouteManager = new MacAudioRouteManager({
       statePath: path.join(app.getPath("userData"), "legacy-audio-route.json"),
       logger: (serviceId, message) => {
         if (processManager) processManager.addLog(serviceId, message);
@@ -123,10 +140,10 @@ if (singleInstanceLock) {
     });
     processManager = new DesktopProcessManager({
       projectRoot,
-      legacyAudioRouteManager,
+      legacyAudioRouteManager: macAudioRouteManager,
     });
     registerIpc();
-    legacyAudioRouteManager.refreshStatus().catch(() => {});
+    macAudioRouteManager.refreshStatus().catch(() => {});
     createWindow();
 
     app.on("activate", () => {
@@ -158,9 +175,12 @@ process.on("SIGTERM", () => {
 });
 
 function openDashboardWindow(url) {
-  if (dashboardWindow && !dashboardWindow.isDestroyed()) {
-    dashboardWindow.focus();
-    dashboardWindow.loadURL(url);
+  validateManagedWindows();
+  const existingDashboard = findDashboardWindow();
+  if (existingDashboard) {
+    dashboardWindow = existingDashboard;
+    bringWindowToFront(existingDashboard);
+    processManager.addLog("system", "Dashboard already open; focusing existing window");
     return dashboardWindow;
   }
   dashboardWindow = new BrowserWindow({
@@ -181,35 +201,113 @@ function openDashboardWindow(url) {
     dashboardWindow = null;
   });
   dashboardWindow.loadURL(url);
+  dashboardWindow.once("ready-to-show", () => {
+    if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+      bringWindowToFront(dashboardWindow);
+    }
+  });
   return dashboardWindow;
+}
+
+function closeDashboardWindows(reason) {
+  validateManagedWindows();
+  const dashboardWindows = findDashboardWindows();
+  if (!dashboardWindows.length) {
+    dashboardWindow = null;
+    return;
+  }
+  dashboardWindow = null;
+  for (const windowToClose of dashboardWindows) {
+    if (windowToClose.isDestroyed()) continue;
+    if (processManager) {
+      processManager.addLog("system", `Closing dashboard window (${reason})`);
+    }
+    windowToClose.close();
+  }
+}
+
+function closeManagedWindows(reason) {
+  closeDashboardWindows(reason);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.removeAllListeners("closed");
+    mainWindow.close();
+    mainWindow = null;
+  }
+}
+
+function bringWindowToFront(targetWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  app.focus({ steal: true });
+  if (targetWindow.isMinimized()) {
+    targetWindow.restore();
+  }
+  targetWindow.show();
+  if (typeof targetWindow.moveTop === "function") {
+    targetWindow.moveTop();
+  }
+  targetWindow.focus();
+  targetWindow.setAlwaysOnTop(true);
+  targetWindow.setAlwaysOnTop(false);
+}
+
+function findDashboardWindow() {
+  return findDashboardWindows()[0] || null;
+}
+
+function findDashboardWindows() {
+  return BrowserWindow.getAllWindows().filter((candidate) => {
+    if (!candidate || candidate.isDestroyed()) return false;
+    if (candidate === mainWindow) return false;
+    if (candidate === dashboardWindow) return true;
+    const url = candidate.webContents.getURL();
+    const title = candidate.getTitle();
+    return title === "Lighting Brain Dashboard" || isDashboardUrl(url);
+  });
+}
+
+function isDashboardUrl(url) {
+  return /^https?:\/\/(127\.0\.0\.1|localhost):8788\/web\/?/u.test(url);
 }
 
 function focusExistingMainWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore();
-    }
-    mainWindow.show();
-    mainWindow.focus();
+    bringWindowToFront(mainWindow);
     return;
   }
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
-    if (dashboardWindow.isMinimized()) {
-      dashboardWindow.restore();
-    }
-    dashboardWindow.show();
-    dashboardWindow.focus();
+    bringWindowToFront(dashboardWindow);
+  }
+}
+
+function validateManagedWindows() {
+  if (mainWindow && mainWindow.isDestroyed()) {
+    mainWindow = null;
+  }
+  if (dashboardWindow && dashboardWindow.isDestroyed()) {
+    dashboardWindow = null;
+  }
+  if (!dashboardWindow) {
+    dashboardWindow = findDashboardWindow();
+  }
+}
+
+function notifySystemSyncState() {
+  validateManagedWindows();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("desktop:system:sync-state", processManager.getSystemStatus());
   }
 }
 
 function quitAfterCleanup() {
   if (cleanupInProgress) return;
   cleanupInProgress = true;
+  closeDashboardWindows("app cleanup");
   Promise.allSettled([
     audioManager.stop(),
-    processManager ? processManager.stopSystem() : Promise.resolve(),
+    processManager ? processManager.stopSystem({ force: true }) : Promise.resolve(),
   ]).finally(() => {
+    closeManagedWindows("app exit");
     cleanupComplete = true;
-    app.quit();
+    app.exit(0);
   });
 }

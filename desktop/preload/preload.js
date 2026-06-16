@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld("lightingBrainDesktop", {
     openDashboardExternal: () => ipcRenderer.invoke("desktop:system:open-dashboard-external"),
     forceCleanupPorts: (options = {}) => ipcRenderer.invoke("desktop:system:force-cleanup-ports", options),
     cleanStaleProjectServices: () => ipcRenderer.invoke("desktop:system:clean-stale-project-services"),
+    onSyncState: (callback) => {
+      const handler = (_event, status) => callback(status);
+      ipcRenderer.on("desktop:system:sync-state", handler);
+      return () => ipcRenderer.removeListener("desktop:system:sync-state", handler);
+    },
   },
   audio: {
     listSources: () => ipcRenderer.invoke("desktop:audio:list-sources"),

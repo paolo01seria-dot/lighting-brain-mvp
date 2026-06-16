@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DMX Dashboard</title>
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./dmx-dashboard.css">
+  </head>
+  <body>
+    <main class="dmx-shell">
+      <header class="dmx-header">
+        <div>
+          <p class="eyebrow">Beta 0.1 output verification</p>
+          <h1>DMX Dashboard</h1>
+          <p class="summary">Read-only mirror of the current mock DMX universe, with guarded manual channel tests.</p>
+        </div>
+        <div class="dmx-actions">
+          <label>
+            Filter
+            <select id="channelFilter">
+              <option value="mapped">Mapped only</option>
+              <option value="changed">Changed only</option>
+              <option value="all">All 512</option>
+            </select>
+          </label>
+          <button id="refreshDmx" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="dmx-status-grid">
+        <article>
+          <strong>Driver</strong>
+          <span id="driverStatus">-</span>
+        </article>
+        <article>
+          <strong>Fixture map</strong>
+          <span id="fixtureMapSource">-</span>
+        </article>
+        <article>
+          <strong>QLC bridge</strong>
+          <span id="qlcBridgeStatus">-</span>
+        </article>
+        <article>
+          <strong>Manual DMX Test</strong>
+          <span id="manualStatus">disarmed</span>
+        </article>
+      </section>
+
+      <section class="dmx-test-panel">
+        <div>
+          <h2>Manual DMX Test</h2>
+          <p class="summary">Disabled by default. When armed, faders write through the same dashboard output state and are logged as manual_dmx_dashboard.</p>
+        </div>
+        <div class="dmx-actions">
+          <button id="armManual" class="debug-button" type="button">Arm Manual DMX Test</button>
+          <button id="blackoutDmx" class="danger-button" type="button">Blackout All</button>
+        </div>
+      </section>
+
+      <section class="dmx-main-grid">
+        <div class="dmx-panel channel-panel">
+          <div class="panel-heading">
+            <h2>Universe 0 Channels</h2>
+            <span id="channelCount">0 channels</span>
+          </div>
+          <div id="channelGrid" class="channel-grid"></div>
+        </div>
+
+        <aside class="dmx-side">
+          <section class="dmx-panel">
+            <h2>Diagnostics</h2>
+            <div id="diagnostics" class="diagnostics"></div>
+          </section>
+
+          <section class="dmx-panel">
+            <h2>Last 50 Events</h2>
+            <div id="eventLog" class="event-log"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <script src="./dmx-dashboard.js"></script>
+  </body>
+</html>

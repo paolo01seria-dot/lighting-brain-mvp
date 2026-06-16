@@ -19,6 +19,8 @@
           <button id="startSystem" type="button">Start System</button>
           <button id="stopSystem" type="button">Stop System</button>
           <button id="openDashboard" type="button">Open Dashboard</button>
+          <button id="openLightSetup" type="button">Light Setup</button>
+          <button id="openDmxDashboard" type="button">DMX Dashboard</button>
           <button id="toggleAudioSetup" type="button">Audio Setup</button>
           <button id="cleanStale" class="debug-button" type="button">Clean Stale Project Services</button>
           <button id="openExternal" class="debug-button" type="button">Open in Browser</button>
@@ -54,6 +56,23 @@
             <button id="restorePreviousOutput" class="debug-button" type="button">Restore Previous Output</button>
           </div>
         </div>
+      </section>
+
+      <section class="panel light-setup-panel">
+        <div class="section-header">
+          <div>
+            <h2>Light Setup</h2>
+            <p class="summary">Choose the saved fixture/DMX setup used by Start System, DMX Dashboard, and output diagnostics.</p>
+          </div>
+          <div class="actions">
+            <button id="refreshSetups" type="button">Refresh Setups</button>
+            <button id="openSetupLight" type="button">Open Setup Light</button>
+            <button id="validateSetup" type="button">Validate Selected Setup</button>
+            <button id="setCurrentSetup" type="button">Set as Current/Default</button>
+          </div>
+        </div>
+        <div id="currentSetupSummary" class="setup-summary"></div>
+        <div id="setupList" class="setup-list"></div>
       </section>
 
       <section class="dashboard">

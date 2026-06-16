@@ -85,11 +85,11 @@ class DesktopProcessManager {
           args: ["-m", "lighting_brain.qlc_bridge", "--serve", "--bridge-host", "127.0.0.1", "--bridge-port", "8791"],
           host: "127.0.0.1",
           port: 8791,
-          probePath: "/health",
-          url: "http://127.0.0.1:8791/health",
+          probePath: "/dmx-state",
+          url: "http://127.0.0.1:8791/dmx-state",
           child: null,
           optional: true,
-          expectedJson: (payload) => payload && payload.ok === true,
+          expectedJson: (payload) => payload && payload.qlcBridgeStatus === "connected" && Array.isArray(payload.channels),
           note: "Optional fallback bridge. Start only when QLC+ Web Interface is running on 127.0.0.1:9999.",
           staleMatchers: ["lighting_brain.qlc_bridge", "8791"],
         },
@@ -137,6 +137,16 @@ class DesktopProcessManager {
     });
     this.startPromise = startPromise;
     return startPromise;
+  }
+
+  setQlcFixtureMapPath(fixtureMapPath) {
+    const service = this.services.get("qlcBridge");
+    if (!service) return;
+    const baseArgs = ["-m", "lighting_brain.qlc_bridge", "--serve", "--bridge-host", "127.0.0.1", "--bridge-port", "8791"];
+    service.args = fixtureMapPath ? [...baseArgs, "--fixture-map", fixtureMapPath] : baseArgs;
+    service.note = fixtureMapPath
+      ? `Optional fallback bridge using selected fixture map: ${fixtureMapPath}`
+      : "Optional fallback bridge. Start only when QLC+ Web Interface is running on 127.0.0.1:9999.";
   }
 
   async stopSystem({ force = false } = {}) {

@@ -4,11 +4,14 @@ from copy import deepcopy
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import time
 from typing import Any, Protocol
 
 
 DMX_UNIVERSE_SIZE = 512
 DEFAULT_SETUP_LIGHT_CONFIG_PATH = Path("configs/fixture_map.json")
+DEFAULT_SETUP_LIGHT_LIBRARY_DIR = Path("configs/light-setups")
+DEFAULT_SETUP_LIGHT_SELECTION_PATH = Path("configs/light_setup_selection.json")
 
 
 SIX_LIGHT_TEST_PRESET = [
@@ -144,6 +147,40 @@ def load_fixture_map(path: str | Path | None = None, fallback_to_preset: bool = 
   return setup_light_payload_to_fixture_map(payload)
 
 
+def selected_fixture_setup_path(
+  selection_path: str | Path = DEFAULT_SETUP_LIGHT_SELECTION_PATH,
+) -> Path | None:
+  selection_path = Path(selection_path)
+  if not selection_path.exists():
+    return None
+  with selection_path.open("r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+  selected = payload.get("selectedSetupPath")
+  return Path(selected).expanduser() if selected else None
+
+
+def load_selected_fixture_map(
+  selection_path: str | Path = DEFAULT_SETUP_LIGHT_SELECTION_PATH,
+  fallback_to_preset: bool = True,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+  setup_path = selected_fixture_setup_path(selection_path)
+  if setup_path and setup_path.exists():
+    fixtures = load_fixture_map(setup_path, fallback_to_preset=False)
+    return fixtures, {
+      "source": "selected_setup",
+      "path": str(setup_path),
+      "fallback": False,
+    }
+  if fallback_to_preset:
+    return factory_default_fixture_map(), {
+      "source": "built_in_six_light_test_preset",
+      "path": None,
+      "fallback": True,
+      "reason": "No selected setup file found",
+    }
+  raise FileNotFoundError(setup_path or selection_path)
+
+
 def clamp_dmx(value: float | int) -> int:
   return max(0, min(255, int(round(float(value)))))
 
@@ -184,6 +221,155 @@ class ChannelChange:
   channel: int
   old: int
   new: int
+
+
+@dataclass(frozen=True)
+class DmxOutputEvent:
+  timestamp: float
+  output_mode: str
+  driver: str
+  source: str
+  emitted: bool
+  changes: tuple[ChannelChange, ...]
+
+  def serialize(self) -> dict[str, Any]:
+    return {
+      "timestamp": self.timestamp,
+      "outputMode": self.output_mode,
+      "driver": self.driver,
+      "source": self.source,
+      "emitted": self.emitted,
+      "changedChannels": [
+        {"channel": change.channel, "old": change.old, "new": change.new}
+        for change in self.changes
+      ],
+    }
+
+
+def fixture_channel_labels(fixtures: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+  labels: dict[int, dict[str, Any]] = {}
+  role_names = {
+    "dimmer": "DIMMER",
+    "white": "W1",
+    "white2": "W2",
+    "strobe": "STROBE",
+    "mode": "MODE",
+    "speed": "SPEED",
+  }
+  for fixture in validate_fixture_map(fixtures):
+    fixture_id = fixture["id"]
+    fixture_label = fixture.get("label", fixture_id)
+    for local in range(1, int(fixture["channels"]) + 1):
+      absolute = absolute_channel(fixture, local)
+      labels[absolute] = {
+        "fixtureId": fixture_id,
+        "fixtureLabel": fixture_label,
+        "localChannel": local,
+        "role": "unused",
+        "label": f"{fixture_label} CH{local}",
+        "controllable": True,
+      }
+    for color_key, role_label in (("r", "R"), ("g", "G"), ("b", "B")):
+      local = (fixture.get("rgb") or {}).get(color_key)
+      if local is not None:
+        labels[absolute_channel(fixture, local)].update({"role": role_label, "label": f"{fixture_label} {role_label}"})
+    for color_key, role_label in (("r", "R2"), ("g", "G2"), ("b", "B2")):
+      local = (fixture.get("rgb2") or {}).get(color_key)
+      if local is not None:
+        labels[absolute_channel(fixture, local)].update({"role": role_label, "label": f"{fixture_label} {role_label}"})
+    for key, role_label in role_names.items():
+      local = fixture.get(key)
+      if local is not None:
+        labels[absolute_channel(fixture, local)].update({"role": role_label, "label": f"{fixture_label} {role_label}"})
+  return labels
+
+
+def fixture_map_diagnostics(fixtures: list[dict[str, Any]]) -> dict[str, Any]:
+  diagnostics = {
+    "outOfRange": [],
+    "overlaps": [],
+    "unusedChannels": [],
+    "mappedChannels": [],
+  }
+  seen: dict[int, str] = {}
+  for fixture in validate_fixture_map(fixtures):
+    fixture_id = fixture["id"]
+    for local in range(1, int(fixture["channels"]) + 1):
+      absolute = absolute_channel(fixture, local)
+      diagnostics["mappedChannels"].append(absolute)
+      if absolute < 1 or absolute > DMX_UNIVERSE_SIZE:
+        diagnostics["outOfRange"].append({"fixtureId": fixture_id, "channel": absolute})
+      if absolute in seen:
+        diagnostics["overlaps"].append({"channel": absolute, "fixtureIds": [seen[absolute], fixture_id]})
+      seen[absolute] = fixture_id
+  labels = fixture_channel_labels(fixtures)
+  diagnostics["unusedChannels"] = sorted(channel for channel, label in labels.items() if label.get("role") == "unused")
+  diagnostics["mappedChannels"] = sorted(set(diagnostics["mappedChannels"]))
+  return diagnostics
+
+
+class DmxOutputMirror:
+  def __init__(
+    self,
+    fixtures: list[dict[str, Any]] | None = None,
+    output_mode: str = "mock",
+    driver_name: str = "MockDmxDriver",
+    logger=print,
+  ):
+    self.driver = MockDmxDriver(fixtures=fixtures, logger=logger)
+    self.output_mode = output_mode
+    self.driver_name = driver_name
+    self.manual_armed = False
+    self.events: list[DmxOutputEvent] = []
+
+  @property
+  def fixtures(self) -> list[dict[str, Any]]:
+    return self.driver.fixtures
+
+  def set_manual_armed(self, armed: bool) -> dict[str, Any]:
+    self.manual_armed = bool(armed)
+    return {"manualArmed": self.manual_armed}
+
+  def set_channel(self, channel: int, value: float | int, source: str = "dmx_output", emitted: bool = True) -> list[ChannelChange]:
+    changes = self.driver.set_channel(channel, value)
+    self._record_event(source=source, emitted=emitted, changes=changes)
+    return changes
+
+  def manual_set_channel(self, channel: int, value: float | int) -> dict[str, Any]:
+    if not self.manual_armed:
+      return {"ok": False, "reason": "manual_test_not_armed", "changes": []}
+    changes = self.set_channel(channel, value, source="manual_dmx_dashboard", emitted=True)
+    return {"ok": True, "changes": [{"channel": change.channel, "old": change.old, "new": change.new} for change in changes]}
+
+  def blackout(self, source: str = "dmx_output_blackout", emitted: bool = True) -> list[ChannelChange]:
+    changes = self.driver.blackout()
+    self._record_event(source=source, emitted=emitted, changes=changes)
+    return changes
+
+  def snapshot(self) -> dict[str, Any]:
+    serialized = self.driver.serialize(include_zero=True)
+    return {
+      "universe": serialized["universe"],
+      "size": serialized["size"],
+      "outputMode": self.output_mode,
+      "driver": self.driver_name,
+      "manualArmed": self.manual_armed,
+      "channels": serialized["channels"],
+      "labels": {str(channel): value for channel, value in fixture_channel_labels(self.fixtures).items()},
+      "diagnostics": fixture_map_diagnostics(self.fixtures),
+      "events": [event.serialize() for event in self.events[-50:]],
+    }
+
+  def _record_event(self, source: str, emitted: bool, changes: list[ChannelChange]) -> None:
+    self.events.append(DmxOutputEvent(
+      timestamp=time.time(),
+      output_mode=self.output_mode,
+      driver=self.driver_name,
+      source=source,
+      emitted=emitted,
+      changes=tuple(changes),
+    ))
+    self.events = self.events[-50:]
 
 
 class DmxUniverse:

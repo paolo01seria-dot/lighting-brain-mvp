@@ -146,9 +146,44 @@ interpretato come configurazione finale hardcoded.
 
 Driver previsti:
 
-- `QlcOutputDriver`: fallback attuale, delega al bridge QLC+.
 - `MockDmxDriver`: universo interno a 512 canali per test/debug.
-- `InternalFtdiDmxDriver`: futuro driver hardware FTDI USB-DMX.
+- `ProtectedDirectFtdiOpenDmxAdapter`: scaffold beta 0.1 per il cavo
+  `FT232R USB UART (S/N: BG03EQH8)`. Rileva il target, ma non apre ancora USB e
+  non scrive DMX reale.
+- `InternalFtdiDmxDriver`: prossimo driver hardware diretto FTDI/OpenDMX.
+- `QlcOutputDriver`: fallback/emergenza/debug, delega al bridge QLC+.
+
+Direzione beta 0.1 principale:
+
+```text
+Lighting Brain desktop app
+-> direct FTDI/OpenDMX driver
+-> FT232R USB UART cable
+-> DMX fixtures
+```
+
+Direzione fallback:
+
+```text
+Lighting Brain desktop app
+-> QLC Bridge
+-> QLC+
+-> USB-DMX cable
+-> DMX fixtures
+```
+
+QLC+ non deve piu' essere considerato il bridge obbligatorio sempre acceso. Deve
+restare disponibile come strada di sicurezza mentre il driver diretto matura.
+Il target immediato del driver diretto e' solo il cavo osservato:
+
+- nome: `FT232R USB UART`
+- seriale: `BG03EQH8`
+- protocollo previsto: OpenTX/OpenDMX
+- backend previsto su macOS: `libftdi1`/`libusb`
+
+L'universo e la frequenza di output devono restare configurabili. Non vanno
+hardcodati come "Universe 1" o "30Hz". Il valore iniziale puo' essere default,
+ma deve passare da configurazione.
 
 Il primo pezzo implementato e' volutamente solo mock:
 
@@ -164,6 +199,9 @@ Il primo pezzo implementato e' volutamente solo mock:
 - `MockDmxDriver.blackout()`
 - `MockDmxDriver.serialize()`
 - `MockDmxDriver.active_channel_table()`
+- `DirectFtdiOutputConfig(universe, output_frequency_hz, target_serial)`
+- `DirectFtdiProbe`
+- `ProtectedDirectFtdiOpenDmxAdapter`
 
 La mappa fixture supporta gia':
 
@@ -173,7 +211,14 @@ La mappa fixture supporta gia':
 
 Caricamento previsto:
 
-- `load_fixture_map("configs/fixture_map.json")` per un file salvato in futuro.
+- `configs/light-setups/` contiene i Setup Light JSON salvati disponibili nel
+  launcher desktop.
+- `configs/light_setup_selection.json` contiene il setup selezionato come
+  current/default.
+- `load_selected_fixture_map()` legge la selezione corrente per dry-run e
+  diagnostica.
+- `load_fixture_map("configs/fixture_map.json")` resta compatibile con il file
+  legacy/singolo.
 - `setup_light_payload_to_fixture_map(payload)` per usare direttamente il formato
   prodotto da Setup Light.
 - fallback al preset solo quando non c'e' ancora una mappa utente.

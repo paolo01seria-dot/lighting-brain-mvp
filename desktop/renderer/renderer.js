@@ -3,12 +3,16 @@
 const api = window.lightingBrainDesktop;
 let uiBusy = false;
 let lastStatus = null;
+let lastLightSetupStatus = null;
+let selectedSetupPath = null;
 let removeSyncListener = null;
 
 const elements = {
   startSystem: document.querySelector("#startSystem"),
   stopSystem: document.querySelector("#stopSystem"),
   openDashboard: document.querySelector("#openDashboard"),
+  openLightSetup: document.querySelector("#openLightSetup"),
+  openDmxDashboard: document.querySelector("#openDmxDashboard"),
   toggleAudioSetup: document.querySelector("#toggleAudioSetup"),
   audioSetupPanel: document.querySelector("#audioSetupPanel"),
   openAudioMidiSetup: document.querySelector("#openAudioMidiSetup"),
@@ -20,6 +24,12 @@ const elements = {
   cleanStale: document.querySelector("#cleanStale"),
   openExternal: document.querySelector("#openExternal"),
   forceCleanup: document.querySelector("#forceCleanup"),
+  refreshSetups: document.querySelector("#refreshSetups"),
+  openSetupLight: document.querySelector("#openSetupLight"),
+  validateSetup: document.querySelector("#validateSetup"),
+  setCurrentSetup: document.querySelector("#setCurrentSetup"),
+  currentSetupSummary: document.querySelector("#currentSetupSummary"),
+  setupList: document.querySelector("#setupList"),
   serviceList: document.querySelector("#serviceList"),
   audioSources: document.querySelector("#audioSources"),
   logs: document.querySelector("#logs"),
@@ -121,6 +131,22 @@ elements.openDashboard.addEventListener("click", async () => {
   }
 });
 
+elements.openLightSetup.addEventListener("click", async () => {
+  try {
+    await api.system.openLightSetup();
+  } catch (error) {
+    appendLocalLog(`open light setup error: ${error.message}`);
+  }
+});
+
+elements.openDmxDashboard.addEventListener("click", async () => {
+  try {
+    await api.system.openDmxDashboard();
+  } catch (error) {
+    appendLocalLog(`open dmx dashboard error: ${error.message}`);
+  }
+});
+
 elements.cleanStale.addEventListener("click", async () => {
   setBusy(true);
   try {
@@ -162,18 +188,80 @@ elements.forceCleanup.addEventListener("click", async () => {
   }
 });
 
+elements.refreshSetups.addEventListener("click", async () => {
+  setBusy(true);
+  try {
+    lastLightSetupStatus = await api.lightSetup.refresh();
+    selectedSetupPath = lastLightSetupStatus.current?.path || selectedSetupPath;
+    renderLightSetup(lastLightSetupStatus);
+  } catch (error) {
+    appendLocalLog(`refresh setups error: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+elements.openSetupLight.addEventListener("click", async () => {
+  try {
+    await api.system.openLightSetup();
+    appendLocalLog("Light Setup opened in its dedicated window.");
+  } catch (error) {
+    appendLocalLog(`open setup light error: ${error.message}`);
+  }
+});
+
+elements.validateSetup.addEventListener("click", async () => {
+  if (!selectedSetupPath) {
+    appendLocalLog("validate setup ignored: no saved setup selected");
+    return;
+  }
+  try {
+    const result = await api.lightSetup.validate(selectedSetupPath);
+    appendLocalLog(`setup validation: ${result.valid ? "valid" : `invalid - ${result.error}`}`);
+    await refresh();
+  } catch (error) {
+    appendLocalLog(`validate setup error: ${error.message}`);
+  }
+});
+
+elements.setCurrentSetup.addEventListener("click", async () => {
+  if (!selectedSetupPath) {
+    appendLocalLog("set current setup ignored: no saved setup selected");
+    return;
+  }
+  setBusy(true);
+  try {
+    const result = await api.lightSetup.setCurrent(selectedSetupPath);
+    if (!result.ok) {
+      appendLocalLog(`set current setup failed: ${result.error || "unknown error"}`);
+    }
+    lastLightSetupStatus = result.status || await api.lightSetup.getStatus();
+    selectedSetupPath = lastLightSetupStatus.current?.path || selectedSetupPath;
+    renderLightSetup(lastLightSetupStatus);
+    appendLocalLog(result.ok ? `current setup selected: ${selectedSetupPath}` : "current setup unchanged");
+  } catch (error) {
+    appendLocalLog(`set current setup error: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
 async function refresh() {
-  const [status, logs, audioSources, legacyAudioStatus] = await Promise.all([
+  const [status, logs, audioSources, legacyAudioStatus, lightSetupStatus] = await Promise.all([
     api.system.getSystemStatus(),
     api.system.getLogs(),
     api.audio.listSources(),
     api.legacyAudio.getStatus(),
+    api.lightSetup.getStatus(),
   ]);
   lastStatus = status;
+  lastLightSetupStatus = lightSetupStatus;
+  selectedSetupPath = selectedSetupPath || lightSetupStatus.current?.path || null;
   elements.dashboardUrl.textContent = status.dashboardUrl;
   renderServices(status.services);
   renderAudioSources(audioSources);
   renderLegacyAudioStatus(legacyAudioStatus);
+  renderLightSetup(lightSetupStatus);
   renderLogs(logs);
   renderSystemNotice(status);
   syncActionState();
@@ -259,6 +347,53 @@ function renderLegacyAudioStatus(status) {
   );
 }
 
+function renderLightSetup(status) {
+  const current = status.current || {};
+  elements.currentSetupSummary.replaceChildren(...[
+    ["Current/default setup", current.name || "-"],
+    ["Path", current.path || "built-in fallback preset"],
+    ["Fixtures", current.fixtureCount ?? 0],
+    ["Mapped DMX channels", current.mappedChannelCount ?? 0],
+    ["Validity", current.valid ? "valid" : `invalid: ${current.error || "unknown"}`],
+    ["Last modified", current.lastModified || "-"],
+    ["Setup folder", status.setupDirectory || "-"],
+    ["Selection config", status.selectionPath || "-"],
+  ].map(([label, value]) => {
+    const row = document.createElement("article");
+    row.className = "setup-summary-row";
+    row.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span>`;
+    return row;
+  }));
+
+  const setups = status.setups || [];
+  if (!setups.length) {
+    const empty = document.createElement("p");
+    empty.className = "summary";
+    empty.textContent = "No saved setup files found yet. Put Setup Light JSON files in the setup folder.";
+    elements.setupList.replaceChildren(empty);
+    return;
+  }
+  elements.setupList.replaceChildren(...setups.map((setup) => renderSetupItem(setup, current)));
+}
+
+function renderSetupItem(setup, current) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = `setup-item${setup.valid ? "" : " setup-invalid"}${setup.path === current.path ? " setup-current" : ""}${setup.path === selectedSetupPath ? " setup-selected" : ""}`;
+  item.innerHTML = `
+    <strong>${escapeHtml(setup.name)}</strong>
+    <small>${escapeHtml(setup.path || "")}</small>
+    <span>${escapeHtml(setup.fixtureCount)} fixtures · ${escapeHtml(setup.mappedChannelCount)} channels · ${setup.valid ? "valid" : `invalid: ${escapeHtml(setup.error || "unknown")}`}</span>
+    <small>${escapeHtml(setup.lastModified || "-")}</small>
+  `;
+  item.addEventListener("click", () => {
+    selectedSetupPath = setup.path;
+    renderLightSetup(lastLightSetupStatus);
+    syncActionState();
+  });
+  return item;
+}
+
 function renderLogs(logs) {
   elements.logs.textContent = logs
     .map((entry) => `[${entry.time}] ${entry.serviceId}: ${entry.message}`)
@@ -293,6 +428,11 @@ function syncActionState() {
   elements.forceEnableLegacyAudio.disabled = uiBusy;
   elements.restorePreviousOutput.disabled = uiBusy;
   elements.cleanStale.disabled = uiBusy;
+  elements.refreshSetups.disabled = uiBusy;
+  elements.openSetupLight.disabled = uiBusy || syncInProgress || !webHealthy;
+  elements.openLightSetup.disabled = uiBusy || syncInProgress || !webHealthy;
+  elements.validateSetup.disabled = uiBusy || !selectedSetupPath;
+  elements.setCurrentSetup.disabled = uiBusy || !selectedSetupPath;
   elements.openDashboard.disabled = uiBusy || syncInProgress || !webHealthy;
   elements.openExternal.disabled = uiBusy;
   elements.forceCleanup.disabled = uiBusy;

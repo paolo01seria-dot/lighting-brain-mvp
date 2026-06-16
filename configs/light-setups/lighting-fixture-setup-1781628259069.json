@@ -1,0 +1,426 @@
+{
+  "version": 1,
+  "created_at": "2026-06-16T16:44:19.053Z",
+  "fixtures": [
+    {
+      "id": "fixture_001",
+      "index": 0,
+      "label": "up-centre",
+      "channelCount": 12,
+      "startChannel": 1,
+      "endChannel": 12,
+      "roles": {
+        "dimmer": 1,
+        "red": 2,
+        "green": 3,
+        "blue": 4,
+        "white": 5,
+        "strobe": 10,
+        "mode": 11,
+        "speed": 12
+      },
+      "channels": [
+        {
+          "local": 1,
+          "absolute": 1,
+          "role": "dimmer"
+        },
+        {
+          "local": 2,
+          "absolute": 2,
+          "role": "red"
+        },
+        {
+          "local": 3,
+          "absolute": 3,
+          "role": "green"
+        },
+        {
+          "local": 4,
+          "absolute": 4,
+          "role": "blue"
+        },
+        {
+          "local": 5,
+          "absolute": 5,
+          "role": "white"
+        },
+        {
+          "local": 6,
+          "absolute": 6,
+          "role": "red"
+        },
+        {
+          "local": 7,
+          "absolute": 7,
+          "role": "green"
+        },
+        {
+          "local": 8,
+          "absolute": 8,
+          "role": "blue"
+        },
+        {
+          "local": 9,
+          "absolute": 9,
+          "role": "white"
+        },
+        {
+          "local": 10,
+          "absolute": 10,
+          "role": "strobe"
+        },
+        {
+          "local": 11,
+          "absolute": 11,
+          "role": "mode"
+        },
+        {
+          "local": 12,
+          "absolute": 12,
+          "role": "speed"
+        }
+      ]
+    },
+    {
+      "id": "fixture_009",
+      "index": 1,
+      "label": "middle-R-last",
+      "channelCount": 6,
+      "startChannel": 15,
+      "endChannel": 20,
+      "roles": {
+        "dimmer": 15,
+        "red": 16,
+        "green": 17,
+        "blue": 18,
+        "strobe": 19,
+        "mode": 20
+      },
+      "channels": [
+        {
+          "local": 1,
+          "absolute": 15,
+          "role": "dimmer"
+        },
+        {
+          "local": 2,
+          "absolute": 16,
+          "role": "red"
+        },
+        {
+          "local": 3,
+          "absolute": 17,
+          "role": "green"
+        },
+        {
+          "local": 4,
+          "absolute": 18,
+          "role": "blue"
+        },
+        {
+          "local": 5,
+          "absolute": 19,
+          "role": "strobe"
+        },
+        {
+          "local": 6,
+          "absolute": 20,
+          "role": "mode"
+        }
+      ]
+    },
+    {
+      "id": "fixture_017",
+      "index": 2,
+      "label": "down-R-last",
+      "channelCount": 3,
+      "startChannel": 23,
+      "endChannel": 25,
+      "roles": {
+        "red": 23,
+        "green": 24,
+        "blue": 25
+      },
+      "channels": [
+        {
+          "local": 1,
+          "absolute": 23,
+          "role": "red"
+        },
+        {
+          "local": 2,
+          "absolute": 24,
+          "role": "green"
+        },
+        {
+          "local": 3,
+          "absolute": 25,
+          "role": "blue"
+        }
+      ]
+    },
+    {
+      "id": "fixture_025",
+      "index": 3,
+      "label": "down-centre",
+      "channelCount": 6,
+      "startChannel": 28,
+      "endChannel": 33,
+      "roles": {
+        "dimmer": 28,
+        "red": 29,
+        "green": 30,
+        "blue": 31,
+        "strobe": 32,
+        "mode": 33
+      },
+      "channels": [
+        {
+          "local": 1,
+          "absolute": 28,
+          "role": "dimmer"
+        },
+        {
+          "local": 2,
+          "absolute": 29,
+          "role": "red"
+        },
+        {
+          "local": 3,
+          "absolute": 30,
+          "role": "green"
+        },
+        {
+          "local": 4,
+          "absolute": 31,
+          "role": "blue"
+        },
+        {
+          "local": 5,
+          "absolute": 32,
+          "role": "strobe"
+        },
+        {
+          "local": 6,
+          "absolute": 33,
+          "role": "mode"
+        }
+      ]
+    },
+    {
+      "id": "fixture_034",
+      "index": 4,
+      "label": "down-L-last",
+      "channelCount": 3,
+      "startChannel": 36,
+      "endChannel": 38,
+      "roles": {
+        "red": 36,
+        "green": 37,
+        "blue": 38
+      },
+      "channels": [
+        {
+          "local": 1,
+          "absolute": 36,
+          "role": "red"
+        },
+        {
+          "local": 2,
+          "absolute": 37,
+          "role": "green"
+        },
+        {
+          "local": 3,
+          "absolute": 38,
+          "role": "blue"
+        }
+      ]
+    },
+    {
+      "id": "fixture_041",
+      "index": 5,
+      "label": "middle-L-last",
+      "channelCount": 6,
+      "startChannel": 41,
+      "endChannel": 46,
+      "roles": {
+        "dimmer": 41,
+        "red": 42,
+        "green": 43,
+        "blue": 44,
+        "strobe": 45,
+        "mode": 46
+      },
+      "channels": [
+        {
+          "local": 1,
+          "absolute": 41,
+          "role": "dimmer"
+        },
+        {
+          "local": 2,
+          "absolute": 42,
+          "role": "red"
+        },
+        {
+          "local": 3,
+          "absolute": 43,
+          "role": "green"
+        },
+        {
+          "local": 4,
+          "absolute": 44,
+          "role": "blue"
+        },
+        {
+          "local": 5,
+          "absolute": 45,
+          "role": "strobe"
+        },
+        {
+          "local": 6,
+          "absolute": 46,
+          "role": "mode"
+        }
+      ]
+    }
+  ],
+  "qlcFixtures": [
+    {
+      "id": "fixture_001",
+      "label": "up-centre",
+      "address": 1,
+      "channels": 12,
+      "map": {
+        "dimmer": 1,
+        "r": 2,
+        "g": 3,
+        "b": 4,
+        "white": 5,
+        "r2": 6,
+        "g2": 7,
+        "b2": 8,
+        "white2": 9,
+        "strobe": 10,
+        "mode": 11,
+        "speed": 12
+      },
+      "rgb": {
+        "r": 2,
+        "g": 3,
+        "b": 4
+      },
+      "dimmer": 1,
+      "white": 5,
+      "rgb2": {
+        "r": 6,
+        "g": 7,
+        "b": 8
+      },
+      "white2": 9,
+      "strobe": 10,
+      "mode": 11,
+      "speed": 12
+    },
+    {
+      "id": "fixture_009",
+      "label": "middle-R-last",
+      "address": 15,
+      "channels": 6,
+      "map": {
+        "dimmer": 1,
+        "r": 2,
+        "g": 3,
+        "b": 4,
+        "strobe": 5,
+        "mode": 6
+      },
+      "rgb": {
+        "r": 2,
+        "g": 3,
+        "b": 4
+      },
+      "dimmer": 1,
+      "strobe": 5,
+      "mode": 6
+    },
+    {
+      "id": "fixture_017",
+      "label": "down-R-last",
+      "address": 23,
+      "channels": 3,
+      "map": {
+        "r": 1,
+        "g": 2,
+        "b": 3
+      },
+      "rgb": {
+        "r": 1,
+        "g": 2,
+        "b": 3
+      }
+    },
+    {
+      "id": "fixture_025",
+      "label": "down-centre",
+      "address": 28,
+      "channels": 6,
+      "map": {
+        "dimmer": 1,
+        "r": 2,
+        "g": 3,
+        "b": 4,
+        "strobe": 5,
+        "mode": 6
+      },
+      "rgb": {
+        "r": 2,
+        "g": 3,
+        "b": 4
+      },
+      "dimmer": 1,
+      "strobe": 5,
+      "mode": 6
+    },
+    {
+      "id": "fixture_034",
+      "label": "down-L-last",
+      "address": 36,
+      "channels": 3,
+      "map": {
+        "r": 1,
+        "g": 2,
+        "b": 3
+      },
+      "rgb": {
+        "r": 1,
+        "g": 2,
+        "b": 3
+      }
+    },
+    {
+      "id": "fixture_041",
+      "label": "middle-L-last",
+      "address": 41,
+      "channels": 6,
+      "map": {
+        "dimmer": 1,
+        "r": 2,
+        "g": 3,
+        "b": 4,
+        "strobe": 5,
+        "mode": 6
+      },
+      "rgb": {
+        "r": 2,
+        "g": 3,
+        "b": 4
+      },
+      "dimmer": 1,
+      "strobe": 5,
+      "mode": 6
+    }
+  ]
+}

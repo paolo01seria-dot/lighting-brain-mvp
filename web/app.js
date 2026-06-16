@@ -2116,6 +2116,7 @@ function qlcWebBridgeActive() {
 }
 
 function postQlcWeb(path, payload) {
+  mirrorQlcWebToDesktop(path, payload);
   return fetch(`${qlcBridgeUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2126,6 +2127,14 @@ function postQlcWeb(path, payload) {
   }).catch((error) => {
     console.warn(`[qlc-web] failed ${path}`, error);
     logEvent(`[qlc-web] failed ${path}: ${error.message}`);
+  });
+}
+
+function mirrorQlcWebToDesktop(path, payload) {
+  const mirror = window.lightingBrainDesktop?.dmx?.mirrorQlcWeb;
+  if (typeof mirror !== "function") return;
+  mirror({ path, payload: payload ?? {} }).catch((error) => {
+    console.warn("[dmx-dashboard] mirror failed", error);
   });
 }
 
@@ -6813,10 +6822,18 @@ function stopDrag(event) {
   }
 }
 
+function initialInputMode() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("mode") === "light_setup") return "setup_light";
+  return elements.inputSource.value;
+}
+
 restoreStoredFixtureSetup();
 buildLights(Number(elements.lightCount.value), false);
 updateOutputMode();
-setInputMode(elements.inputSource.value);
+const bootInputMode = initialInputMode();
+elements.inputSource.value = bootInputMode;
+setInputMode(bootInputMode);
 drawTrackOverview();
 updateTrainingSummary();
 updateTrainingEditState();

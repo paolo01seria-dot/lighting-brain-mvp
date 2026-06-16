@@ -1,0 +1,172 @@
+.dmx-shell {
+  min-height: 100vh;
+  padding: 28px;
+  background: #101416;
+  color: #edf2f4;
+}
+
+.dmx-header,
+.dmx-test-panel,
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.dmx-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.dmx-actions label {
+  display: grid;
+  gap: 6px;
+  color: #9da8ad;
+  font-size: 0.82rem;
+}
+
+.dmx-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.dmx-status-grid article,
+.dmx-panel,
+.dmx-test-panel {
+  border: 1px solid rgba(130, 152, 158, 0.24);
+  border-radius: 8px;
+  background: #151b1e;
+}
+
+.dmx-status-grid article {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+}
+
+.dmx-status-grid span,
+.diagnostics span,
+.event-log span,
+.event-log small {
+  color: #aeb9bd;
+}
+
+.dmx-test-panel {
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.dmx-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 18px;
+}
+
+.dmx-panel {
+  padding: 18px;
+}
+
+.dmx-side {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.channel-tile {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-height: 190px;
+  padding: 10px 8px;
+  border: 1px solid rgba(130, 152, 158, 0.18);
+  border-radius: 8px;
+  background: #0f1416;
+}
+
+.channel-tile header {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.78rem;
+}
+
+.channel-tile input[type="range"] {
+  width: 128px;
+  height: 22px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  accent-color: #4fc3b1;
+}
+
+.channel-tile input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.channel-tile.is-mapped {
+  border-color: rgba(79, 195, 177, 0.36);
+}
+
+.channel-tile.is-changed {
+  box-shadow: 0 0 0 1px rgba(255, 196, 87, 0.72), 0 0 22px rgba(255, 196, 87, 0.24);
+}
+
+.channel-value {
+  min-width: 42px;
+  border-radius: 6px;
+  padding: 4px 7px;
+  background: #1e282b;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.channel-tile small {
+  width: 100%;
+  overflow: hidden;
+  color: #94a1a6;
+  font-size: 0.68rem;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostics,
+.event-log {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.diagnostics article,
+.event-log article {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 6px;
+  background: rgba(10, 14, 16, 0.74);
+}
+
+.event-log {
+  max-height: 58vh;
+  overflow: auto;
+}
+
+@media (max-width: 1040px) {
+  .dmx-status-grid,
+  .dmx-main-grid {
+    grid-template-columns: 1fr;
+  }
+}

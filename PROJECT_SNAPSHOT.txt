@@ -1,0 +1,79 @@
+===== PWD =====
+/Users/Paolo/Documents/Codex/2026-05-27/dmx-plug-n-play/lighting-brain-mvp
+
+===== BRANCH =====
+checkpoint-before-canonical-lightstate
+
+===== STATUS =====
+ M desktop/README.md
+ M desktop/main/DesktopProcessManager.js
+ M desktop/main/main.js
+ M desktop/preload/preload.js
+ M desktop/renderer/index.html
+ M desktop/renderer/renderer.js
+ M desktop/renderer/styles.css
+ M docs/output_architecture.md
+ M src/lighting_brain/dmx.py
+ M src/lighting_brain/qlc_bridge.py
+ M tests/test_dmx.py
+ M web/app.js
+ M web/index.html
+?? PROJECT_SNAPSHOT.txt
+?? configs/
+?? desktop/main/DmxDashboardState.js
+?? desktop/main/LightSetupManager.js
+?? desktop/renderer/dmx-dashboard.css
+?? desktop/renderer/dmx-dashboard.html
+?? desktop/renderer/dmx-dashboard.js
+?? docs/beta_0_1_dmx_dashboard.md
+?? docs/direct_ftdi_dmx_research.md
+?? scripts/direct_ftdi_probe.py
+?? scripts/output_readiness_check.py
+?? src/lighting_brain/direct_ftdi.py
+?? tests/test_direct_ftdi.py
+
+===== LAST COMMITS =====
+b10f71e Add automatic macOS audio routing
+3b54816 Add Electron startup guards and Codex safety rules
+670efd8 Prevent multiple Electron app instances
+2bb8afb Improve Electron launcher cleanup and process controls
+c90a16b Add Electron desktop scaffold
+76bd2b1 Make fixture mapping configurable and document desktop audio architecture
+0d68737 Add mock DMX output layer and fixture mapping
+d12631d Stable working webapp before desktop app architecture
+eeb7ea2 Lock off light glass rendering
+50d93af Connect QLC Web Bridge to six real DMX fixtures
+eb3a8f8 Add fixture capacity limiter for QLC single fixture output
+9a89720 Add QLC bridge and web DMX control draft
+
+===== DIFF STAT =====
+ desktop/README.md                     |  57 +++++
+ desktop/main/DesktopProcessManager.js |  16 +-
+ desktop/main/main.js                  | 380 +++++++++++++++++++++++++++++++++-
+ desktop/preload/preload.js            |  20 ++
+ desktop/renderer/index.html           |  19 ++
+ desktop/renderer/renderer.js          | 142 ++++++++++++-
+ desktop/renderer/styles.css           |  75 ++++++-
+ docs/output_architecture.md           |  51 ++++-
+ src/lighting_brain/dmx.py             | 186 +++++++++++++++++
+ src/lighting_brain/qlc_bridge.py      | 138 +++++++++++-
+ tests/test_dmx.py                     |  76 +++++++
+ web/app.js                            |  19 +-
+ web/index.html                        |   2 +-
+ 13 files changed, 1162 insertions(+), 19 deletions(-)
+
+===== PACKAGE SCRIPTS =====
+{
+  "name": "lighting-brain-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lighting Brain MVP webapp with optional Electron desktop scaffold.",
+  "scripts": {
+    "desktop:dev": "electron desktop/main/main.js",
+    "desktop:check": "node desktop/scripts/check.js",
+    "dmx:mock-test": "python3 scripts/dmx_mock_test.py"
+  },
+  "devDependencies": {
+    "electron": "^42.4.0"
+  }
+}

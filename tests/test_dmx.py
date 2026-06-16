@@ -1,9 +1,16 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import json
 
 from lighting_brain.dmx import (
+  DmxOutputMirror,
   DmxUniverse,
   MockDmxDriver,
   factory_default_fixture_map,
+  fixture_channel_labels,
+  fixture_map_diagnostics,
+  load_selected_fixture_map,
   setup_light_payload_to_fixture_map,
 )
 
@@ -203,6 +210,75 @@ class DmxUniverseTest(unittest.TestCase):
     self.assertEqual(all_channels["204"], 0)
     self.assertEqual(all_channels["205"], 0)
     self.assertEqual(all_channels["206"], 0)
+
+  def test_fixture_channel_labels_expose_real_roles(self):
+    labels = fixture_channel_labels(factory_default_fixture_map())
+
+    self.assertEqual(labels[1]["role"], "R")
+    self.assertEqual(labels[17]["role"], "DIMMER")
+    self.assertEqual(labels[35]["role"], "R")
+    self.assertEqual(labels[52]["role"], "SPEED")
+
+  def test_fixture_map_diagnostics_reports_unused_and_no_overlap(self):
+    diagnostics = fixture_map_diagnostics(factory_default_fixture_map())
+
+    self.assertEqual(diagnostics["outOfRange"], [])
+    self.assertEqual(diagnostics["overlaps"], [])
+    self.assertIn(34, diagnostics["mappedChannels"])
+    self.assertNotIn(33, diagnostics["mappedChannels"])
+
+  def test_output_mirror_manual_guard_and_event_log(self):
+    mirror = DmxOutputMirror(fixtures=factory_default_fixture_map(), logger=None)
+
+    blocked = mirror.manual_set_channel(1, 255)
+    self.assertFalse(blocked["ok"])
+    self.assertEqual(mirror.snapshot()["channels"]["1"], 0)
+
+    mirror.set_manual_armed(True)
+    accepted = mirror.manual_set_channel(1, 255)
+    snapshot = mirror.snapshot()
+
+    self.assertTrue(accepted["ok"])
+    self.assertEqual(snapshot["channels"]["1"], 255)
+    self.assertEqual(snapshot["events"][-1]["source"], "manual_dmx_dashboard")
+
+  def test_output_mirror_blackout_is_idempotent_and_logged(self):
+    mirror = DmxOutputMirror(fixtures=factory_default_fixture_map(), logger=None)
+
+    mirror.set_channel(1, 255, source="test")
+    changes = mirror.blackout(source="test_blackout")
+    no_changes = mirror.blackout(source="test_blackout")
+
+    self.assertEqual([(change.channel, change.new) for change in changes], [(1, 0)])
+    self.assertEqual(no_changes, [])
+    self.assertEqual(mirror.snapshot()["events"][-1]["source"], "test_blackout")
+
+  def test_load_selected_fixture_map_uses_selection_file(self):
+    with TemporaryDirectory() as tmpdir:
+      tmpdir_path = Path(tmpdir)
+      setup_path = tmpdir_path / "custom_setup.json"
+      selection_path = tmpdir_path / "selection.json"
+      setup_path.write_text(json.dumps([{
+        "id": "custom",
+        "label": "Custom",
+        "address": 77,
+        "channels": 3,
+        "rgb": {"r": 1, "g": 2, "b": 3},
+      }]), encoding="utf-8")
+      selection_path.write_text(json.dumps({"selectedSetupPath": str(setup_path)}), encoding="utf-8")
+
+      fixtures, info = load_selected_fixture_map(selection_path)
+
+    self.assertEqual(fixtures[0]["address"], 77)
+    self.assertEqual(info["source"], "selected_setup")
+    self.assertFalse(info["fallback"])
+
+  def test_load_selected_fixture_map_reports_fallback(self):
+    with TemporaryDirectory() as tmpdir:
+      fixtures, info = load_selected_fixture_map(Path(tmpdir) / "missing.json")
+
+    self.assertEqual(len(fixtures), 6)
+    self.assertTrue(info["fallback"])
 
 
 if __name__ == "__main__":

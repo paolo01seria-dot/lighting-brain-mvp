@@ -32,6 +32,23 @@ inside Electron:
 http://127.0.0.1:8788/web/?v=desktop
 ```
 
+Press **DMX Dashboard** to inspect the beta DMX universe mirror and guarded
+manual DMX tests. This is for output verification only; it does not access real
+USB-DMX hardware yet.
+
+Use **Light Setup** to select the saved fixture/DMX setup used by the launcher
+and DMX Dashboard. Saved Setup Light JSON files are read from:
+
+```text
+configs/light-setups/
+```
+
+The current/default setup selection is stored in:
+
+```text
+configs/light_setup_selection.json
+```
+
 Use **Audio Setup** inside Electron to inspect the legacy macOS route. This is
 the current beta path for system audio:
 
@@ -79,6 +96,17 @@ not launch Electron and does not touch audio devices.
   shutdown path.
 - Guided macOS **Audio Setup** panel for `BlackHole Legacy / Beta audio route`.
 - Automatic legacy route activation/restoration during Start/Stop on macOS.
+- **DMX Dashboard** for beta output verification:
+  - DMX universe 0, channels 1-512.
+  - Fixture labels for the current six-light test preset.
+  - Recent output events.
+  - Guarded manual faders that require **Arm Manual DMX Test**.
+  - Blackout All through the same mock output state.
+- **Light Setup** picker:
+  - lists saved setup JSON files from `configs/light-setups/`;
+  - persists the current/default setup in `configs/light_setup_selection.json`;
+  - loads the selected setup before Start System;
+  - feeds the selected fixture map to the DMX Dashboard.
 - Audio capture skeleton:
   - `AudioCaptureDriver`
   - `PcmFrame`
@@ -101,6 +129,35 @@ not launch Electron and does not touch audio devices.
   is still creating a supported Multi-Output Device in Audio MIDI Setup.
 - Any rewrite of the current web UI, training, review, canonical light state, or
   DMX/QLC behavior.
+
+## DMX Output Device Direction
+
+Primary beta 0.1 direction:
+
+```text
+Lighting Brain desktop app -> Direct FTDI/OpenDMX -> FT232R USB UART cable -> fixtures
+```
+
+Fallback/debug/emergency direction:
+
+```text
+Lighting Brain desktop app -> QLC Bridge -> QLC+ -> USB-DMX cable -> fixtures
+```
+
+The DMX Dashboard is the beta 0.1 verification surface for this boundary. It is
+currently mock-only and will later observe the same output state used by:
+
+- `Direct FTDI/OpenDMX`: planned/main path for the observed cable
+  `FT232R USB UART (S/N: BG03EQH8)`;
+- `QLC+ Bridge`: fallback/debug path;
+- `Mock`: dry-run/dev path.
+
+Universe and output frequency are configuration values. They must not be fixed
+to one hardcoded universe or one hardcoded refresh rate.
+
+The active fixture map is selected by the launcher Light Setup section. If no
+valid saved setup is selected, the app clearly reports that it is using the
+built-in six-light test preset.
 
 Microphone fallback is separate from system output audio and requires explicit
 user consent before it can ever start. BlackHole remains a legacy/beta fallback

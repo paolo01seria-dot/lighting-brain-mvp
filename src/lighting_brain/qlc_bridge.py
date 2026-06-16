@@ -6,6 +6,7 @@ import os
 import socket
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock
 from urllib import error, request
 from urllib.parse import urlparse
 
@@ -140,6 +141,10 @@ class QLCWebClient:
     self.dry_run = dry_run
     self.timeout = timeout
     self.fixture_by_id = {fixture["id"]: fixture for fixture in self.fixtures}
+    self.state_lock = Lock()
+    self.channels = [0] * 512
+    self.events = []
+    self.fixture_map_source = "qlc_bridge_default"
 
   def set_fixtures(self, fixtures):
     if not isinstance(fixtures, list) or not fixtures:
@@ -149,6 +154,8 @@ class QLCWebClient:
         raise ValueError("each fixture needs id, address and channels")
     self.fixtures = fixtures
     self.fixture_by_id = {fixture["id"]: fixture for fixture in self.fixtures}
+    self.fixture_map_source = "qlc_bridge_runtime_fixture_map"
+    self.record_event("fixture_map_updated", [])
     print(f"[qlc] fixture map updated fixtures={len(self.fixtures)}")
     return True
 
@@ -158,14 +165,16 @@ class QLCWebClient:
       return path
     return f"http://{self.host}:{self.port}{path}"
 
-  def set_channel(self, address, value):
+  def set_channel(self, address, value, source="channel"):
     address = int(address)
     value = clamp_dmx(value)
     print(f"[qlc] set channel {address} = {value}")
     if self.dry_run:
+      self.apply_channel_state(address, value, source)
       return True
 
     if self.send_websocket_command(f"CH|{address}|{value}"):
+      self.apply_channel_state(address, value, source)
       return True
 
     failures = []
@@ -176,6 +185,7 @@ class QLCWebClient:
         with request.urlopen(url, timeout=self.timeout) as response:
           status = response.getcode()
           if 200 <= status < 300:
+            self.apply_channel_state(address, value, source)
             return True
           message = f"status={status}"
           print(f"[qlc] failed {message} url={url}")
@@ -228,10 +238,10 @@ class QLCWebClient:
       print(f"[qlc] failed websocket error={exc}")
       return False
 
-  def set_channels(self, mapping):
+  def set_channels(self, mapping, source="channels"):
     ok = True
     for address in sorted(mapping, key=lambda item: int(item)):
-      ok = self.set_channel(address, mapping[address]) and ok
+      ok = self.set_channel(address, mapping[address], source=source) and ok
     return ok
 
   def blackout(self):
@@ -240,7 +250,7 @@ class QLCWebClient:
       for local_channel in range(1, int(fixture["channels"]) + 1):
         mapping[absolute_channel(fixture, local_channel)] = 0
     print("[qlc] blackout")
-    return self.set_channels(mapping)
+    return self.set_channels(mapping, source="blackout")
 
   def fixture(self, fixture_id):
     fixture = self.fixture_by_id.get(fixture_id)
@@ -252,7 +262,7 @@ class QLCWebClient:
     fixture = self.fixture(fixture_id)
     address = absolute_channel(fixture, resolve_local_channel(fixture, local_channel))
     print(f"[qlc] fixture {fixture_id} channel {local_channel} -> address {address} = {clamp_dmx(value)}")
-    return self.set_channel(address, value)
+    return self.set_channel(address, value, source=f"fixture_channel:{fixture_id}:{local_channel}")
 
   def set_fixture_rgb(self, fixture_id, r, g, b, intensity=1.0):
     fixture = self.fixture(fixture_id)
@@ -289,7 +299,7 @@ class QLCWebClient:
       local_channel = fixture.get(safe_channel)
       if local_channel is not None:
         mapping[absolute_channel(fixture, local_channel)] = 0
-    return self.set_channels(mapping)
+    return self.set_channels(mapping, source=f"fixture_rgb:{fixture_id}")
 
   def set_fixture_raw(self, fixture_id, values):
     fixture = self.fixture(fixture_id)
@@ -298,7 +308,7 @@ class QLCWebClient:
     mapping = {}
     for index, value in enumerate(values[: int(fixture["channels"])], start=1):
       mapping[absolute_channel(fixture, index)] = value
-    return self.set_channels(mapping)
+    return self.set_channels(mapping, source=f"fixture_raw:{fixture_id}")
 
   def set_scene(self, scene):
     fixtures = scene.get("fixtures", scene) if isinstance(scene, dict) else {}
@@ -318,6 +328,57 @@ class QLCWebClient:
         ) and ok
     return ok
 
+  def apply_channel_state(self, address, value, source):
+    if address < 1 or address > 512:
+      return
+    with self.state_lock:
+      old = self.channels[address - 1]
+      if old == value:
+        return
+      self.channels[address - 1] = value
+      self.record_event(source, [{"channel": address, "old": old, "new": value}], locked=True)
+
+  def record_event(self, source, changes, locked=False):
+    if locked:
+      self.events.append({
+        "timestamp": time.time(),
+        "source": source,
+        "emitted": True,
+        "changedChannels": changes,
+      })
+      self.events = self.events[-50:]
+      return
+    with self.state_lock:
+      self.record_event(source, changes, locked=True)
+
+  def dmx_state(self):
+    with self.state_lock:
+      labels = fixture_channel_labels(self.fixtures)
+      now = time.time()
+      events = list(self.events[-50:])
+      channels = [
+        {
+          "channel": index + 1,
+          "value": value,
+          "mapped": index + 1 in labels,
+          "recentlyChanged": recently_changed(index + 1, events, now),
+          **labels.get(index + 1, {}),
+        }
+        for index, value in enumerate(self.channels)
+      ]
+    return {
+      "universe": 0,
+      "size": 512,
+      "outputMode": "qlc_bridge",
+      "driver": "QLCWebBridge",
+      "driverStatus": "mirroring live QLC bridge state",
+      "qlcBridgeStatus": "connected",
+      "fixtureMapSource": self.fixture_map_source,
+      "fixtures": len(self.fixtures),
+      "channels": channels,
+      "events": events,
+    }
+
 
 def resolve_local_channel(fixture, local_channel):
   if isinstance(local_channel, str) and not local_channel.isdigit():
@@ -330,6 +391,66 @@ def resolve_local_channel(fixture, local_channel):
 
 def absolute_channel(fixture, local_channel):
   return int(fixture["address"]) + int(local_channel) - 1
+
+
+def fixture_channel_labels(fixtures):
+  labels = {}
+  for fixture in fixtures:
+    fixture_id = fixture.get("id", "")
+    fixture_label = fixture.get("label") or fixture_id
+    for local_channel in range(1, int(fixture["channels"]) + 1):
+      address = absolute_channel(fixture, local_channel)
+      labels[address] = {
+        "fixtureId": fixture_id,
+        "fixtureLabel": fixture_label,
+        "localChannel": local_channel,
+        "role": "unused",
+        "label": f"{fixture_label} CH{local_channel}",
+        "controllable": True,
+      }
+    assign_role_label(labels, fixture, fixture.get("dimmer"), "DIMMER")
+    assign_role_label(labels, fixture, fixture.get("white"), "W1")
+    assign_role_label(labels, fixture, fixture.get("white2"), "W2")
+    assign_role_label(labels, fixture, fixture.get("strobe"), "STROBE")
+    assign_role_label(labels, fixture, fixture.get("mode"), "MODE")
+    assign_role_label(labels, fixture, fixture.get("speed"), "SPEED")
+    assign_rgb_labels(labels, fixture, fixture.get("rgb"), {"r": "R", "g": "G", "b": "B"})
+    assign_rgb_labels(labels, fixture, fixture.get("rgb2"), {"r": "R2", "g": "G2", "b": "B2"})
+  return labels
+
+
+def assign_rgb_labels(labels, fixture, rgb_map, role_names):
+  if not rgb_map:
+    return
+  for key, role in role_names.items():
+    local_channel = rgb_map.get(key)
+    if local_channel is None:
+      continue
+    assign_role_label(labels, fixture, local_channel, role)
+
+
+def assign_role_label(labels, fixture, local_channel, role):
+  if local_channel is None:
+    return
+  address = absolute_channel(fixture, local_channel)
+  fixture_label = fixture.get("label") or fixture.get("id", "")
+  labels[address] = {
+    **labels.get(address, {}),
+    "fixtureId": fixture.get("id", ""),
+    "fixtureLabel": fixture_label,
+    "localChannel": int(local_channel),
+    "role": role,
+    "label": f"{fixture_label} {role}",
+    "controllable": True,
+  }
+
+
+def recently_changed(channel, events, now):
+  for event in reversed(events):
+    for change in event.get("changedChannels", []):
+      if change.get("channel") == channel:
+        return now - float(event.get("timestamp", 0)) < 1.2
+  return False
 
 
 def websocket_text_frame(message):
@@ -393,6 +514,9 @@ def make_bridge_server(client, host, port):
       print(f"[qlc] GET {self.path}")
       if parsed.path == "/health":
         self.write_json({"ok": True, "fixtures": len(client.fixtures), "dry_run": client.dry_run})
+        return
+      if parsed.path == "/dmx-state":
+        self.write_json(client.dmx_state())
         return
       self.send_response(404)
       self.send_cors_headers()

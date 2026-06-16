@@ -12,6 +12,7 @@ const { AUDIO_SOURCE_TYPES } = require("./audio/sourceTypes");
 const { DesktopProcessManager } = require("./DesktopProcessManager");
 const { LegacyAudioRouteManager } = require("./LegacyAudioRouteManager");
 
+const singleInstanceLock = app.requestSingleInstanceLock();
 const projectRoot = path.join(__dirname, "../..");
 let processManager = null;
 let legacyAudioRouteManager = null;
@@ -19,6 +20,11 @@ let cleanupInProgress = false;
 let cleanupComplete = false;
 let mainWindow = null;
 let dashboardWindow = null;
+
+if (!singleInstanceLock) {
+  console.log("Second instance blocked before startup; quitting.");
+  app.quit();
+}
 
 function createSystemOutputDriver() {
   if (process.platform === "win32") return new WindowsWasapiLoopbackDriver();
@@ -99,27 +105,39 @@ function registerIpc() {
   ipcMain.handle("desktop:system:clean-stale-project-services", async () => processManager.cleanStaleProjectServices());
 }
 
-app.whenReady().then(() => {
-  legacyAudioRouteManager = new LegacyAudioRouteManager({
-    statePath: path.join(app.getPath("userData"), "legacy-audio-route.json"),
-    logger: (serviceId, message) => {
-      if (processManager) processManager.addLog(serviceId, message);
-    },
-  });
-  processManager = new DesktopProcessManager({
-    projectRoot,
-    legacyAudioRouteManager,
-  });
-  registerIpc();
-  legacyAudioRouteManager.refreshStatus().catch(() => {});
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+if (singleInstanceLock) {
+  app.on("second-instance", () => {
+    console.log("Second instance blocked; focusing existing window");
+    if (processManager) {
+      processManager.addLog("system", "Second instance blocked; focusing existing window");
     }
+    focusExistingMainWindow();
   });
-});
+
+  app.whenReady().then(() => {
+    legacyAudioRouteManager = new LegacyAudioRouteManager({
+      statePath: path.join(app.getPath("userData"), "legacy-audio-route.json"),
+      logger: (serviceId, message) => {
+        if (processManager) processManager.addLog(serviceId, message);
+      },
+    });
+    processManager = new DesktopProcessManager({
+      projectRoot,
+      legacyAudioRouteManager,
+    });
+    registerIpc();
+    legacyAudioRouteManager.refreshStatus().catch(() => {});
+    createWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      } else {
+        focusExistingMainWindow();
+      }
+    });
+  });
+}
 
 app.on("window-all-closed", () => {
   quitAfterCleanup();
@@ -164,6 +182,24 @@ function openDashboardWindow(url) {
   });
   dashboardWindow.loadURL(url);
   return dashboardWindow;
+}
+
+function focusExistingMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+    if (dashboardWindow.isMinimized()) {
+      dashboardWindow.restore();
+    }
+    dashboardWindow.show();
+    dashboardWindow.focus();
+  }
 }
 
 function quitAfterCleanup() {

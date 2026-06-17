@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
@@ -14,6 +15,7 @@ const { DesktopProcessManager } = require("./DesktopProcessManager");
 const { MacAudioRouteManager } = require("./MacAudioRouteManager");
 const { DmxDashboardState } = require("./DmxDashboardState");
 const { LightSetupManager } = require("./LightSetupManager");
+const { DEFAULT_QLC_FIXTURE_MAP_PATH } = require("./DesktopProcessManager");
 
 const singleInstanceLock = app.requestSingleInstanceLock();
 const projectRoot = path.join(__dirname, "../..");
@@ -29,6 +31,7 @@ let dmxDashboardState = null;
 let lightSetupManager = null;
 let dmxBridgePollTimer = null;
 let dmxBridgePollInFlight = false;
+const currentQlcFixtureMapPath = path.join(projectRoot, DEFAULT_QLC_FIXTURE_MAP_PATH);
 
 if (!singleInstanceLock) {
   console.log("Second instance blocked before startup; quitting.");
@@ -96,9 +99,18 @@ function registerIpc() {
 
   ipcMain.handle("desktop:system:start", async () => {
     if (shouldLoadSetupBeforeStart()) {
-      loadSelectedLightSetupIntoOutput();
+      loadSelectedLightSetupIntoOutput({ pushToRunningBridge: false });
     }
     return processManager.startSystem();
+  });
+  ipcMain.handle("desktop:system:start-qlc-bridge", async () => {
+    const loaded = loadSelectedLightSetupIntoOutput({ pushToRunningBridge: false });
+    broadcastDmxSnapshot();
+    const status = await processManager.ensureQlcBridgeStarted();
+    if (loaded?.fixtureMap) {
+      await pushFixtureMapToQlcBridge(loaded.fixtureMap);
+    }
+    return status;
   });
   ipcMain.handle("desktop:system:stop", async () => {
     if (dmxDashboardState) {
@@ -653,27 +665,48 @@ function postJson(url, payload, timeoutMs = 800) {
   });
 }
 
-function loadSelectedLightSetupIntoOutput() {
+function loadSelectedLightSetupIntoOutput({ pushToRunningBridge = true } = {}) {
   if (!lightSetupManager || !dmxDashboardState) return null;
   const loaded = lightSetupManager.loadCurrentFixtureMap();
-  if (loaded.fixtureMap) {
-    dmxDashboardState.setFixtureMap(loaded.fixtureMap, loaded.source);
-    processManager.setQlcFixtureMapPath(loaded.source);
-    pushFixtureMapToQlcBridge(loaded.fixtureMap);
-  } else if (processManager) {
-    processManager.setQlcFixtureMapPath(null);
-    processManager.addLog("light-setup", "Using built-in fallback preset because no valid saved setup is selected");
+  let fixtureMap = loaded.fixtureMap;
+  let source = loaded.source;
+  if (fixtureMap) {
+    dmxDashboardState.setFixtureMap(fixtureMap, source);
+  } else {
+    fixtureMap = Array.isArray(dmxDashboardState.fixtureMap) ? dmxDashboardState.fixtureMap : null;
+    source = "built-in six-light test preset";
+    if (processManager) {
+      processManager.addLog("light-setup", "Using built-in fallback preset because no valid saved setup is selected");
+    }
+  }
+
+  if (fixtureMap) {
+    writeCurrentQlcFixtureMap(fixtureMap);
+    processManager.setQlcFixtureMapPath(DEFAULT_QLC_FIXTURE_MAP_PATH);
+    if (processManager) {
+      processManager.addLog("qlcBridge", `Prepared diagnostic fixture map ${DEFAULT_QLC_FIXTURE_MAP_PATH} from ${source}`);
+    }
+    if (pushToRunningBridge) {
+      void pushFixtureMapToQlcBridge(fixtureMap);
+    }
   }
   return loaded;
 }
 
+function writeCurrentQlcFixtureMap(fixtureMap) {
+  fs.mkdirSync(path.dirname(currentQlcFixtureMapPath), { recursive: true });
+  fs.writeFileSync(currentQlcFixtureMapPath, `${JSON.stringify(fixtureMap, null, 2)}\n`);
+}
+
 function pushFixtureMapToQlcBridge(fixtureMap) {
-  postJson("http://127.0.0.1:8791/fixture-map", { fixtures: fixtureMap }, 800)
+  return postJson("http://127.0.0.1:8791/fixture-map", { fixtures: fixtureMap }, 800)
     .then(() => {
       if (processManager) processManager.addLog("qlcBridge", "Selected fixture map pushed to running QLC bridge");
+      return true;
     })
     .catch((error) => {
       if (processManager) processManager.addLog("qlcBridge", `QLC bridge fixture-map push skipped: ${error.message}`);
+      return false;
     });
 }
 

@@ -9,6 +9,7 @@ let removeSyncListener = null;
 
 const elements = {
   startSystem: document.querySelector("#startSystem"),
+  startQlcBridge: document.querySelector("#startQlcBridge"),
   stopSystem: document.querySelector("#stopSystem"),
   openDashboard: document.querySelector("#openDashboard"),
   openLightSetup: document.querySelector("#openLightSetup"),
@@ -106,6 +107,29 @@ elements.startSystem.addEventListener("click", async () => {
     await refresh();
   } catch (error) {
     appendLocalLog(`launcher error: ${error.message}`);
+  } finally {
+    setBusy(false);
+  }
+});
+
+elements.startQlcBridge.addEventListener("click", async () => {
+  const qlcBridge = lastStatus?.services?.qlcBridge;
+  const qlcBridgeRunning = qlcBridge?.healthy === true;
+  const qlcBridgeStarting = qlcBridge?.state === "starting" || lastStatus?.qlcBridgeStartInProgress === true;
+  if (uiBusy || lastStatus?.syncInProgress || lastStatus?.systemState === "stopping" || qlcBridgeStarting || qlcBridgeRunning) {
+    appendLocalLog(
+      qlcBridgeRunning
+        ? "Start QLC Bridge ignored: bridge already running."
+        : "Start QLC Bridge ignored: transition already in progress.",
+    );
+    return;
+  }
+  setBusy(true);
+  try {
+    await api.system.startQlcBridge();
+    await refresh();
+  } catch (error) {
+    appendLocalLog(`start qlc bridge error: ${error.message}`);
   } finally {
     setBusy(false);
   }
@@ -280,6 +304,7 @@ function renderServices(services) {
           ${service.port ? `<small>port: ${escapeHtml(service.port)}</small>` : ""}
           ${service.healthy === false ? `<small class="warning">health: not confirmed</small>` : ""}
           ${service.note ? `<small>${escapeHtml(service.note)}</small>` : ""}
+          ${(service.statusDetails || []).map((detail) => `<small>${escapeHtml(detail)}</small>`).join("")}
           ${service.error ? `<small class="error">${escapeHtml(service.error)}</small>` : ""}
         </div>
         <span>${escapeHtml(service.state)}</span>
@@ -419,8 +444,17 @@ function syncActionState() {
   const syncInProgress = lastStatus?.syncInProgress === true || systemState === "syncing";
   const transitionInProgress = systemState === "starting" || systemState === "stopping";
   const startBlocked = uiBusy || syncInProgress || transitionInProgress || requiredHealthy;
+  const qlcBridge = lastStatus?.services?.qlcBridge;
+  const qlcBridgeRunning = qlcBridge?.healthy === true;
+  const qlcBridgeStarting = qlcBridge?.state === "starting" || lastStatus?.qlcBridgeStartInProgress === true;
 
   elements.startSystem.disabled = startBlocked;
+  elements.startQlcBridge.disabled = uiBusy || syncInProgress || systemState === "stopping" || qlcBridgeStarting || qlcBridgeRunning;
+  elements.startQlcBridge.textContent = qlcBridgeRunning
+    ? "QLC Bridge running"
+    : qlcBridgeStarting
+      ? "Starting QLC Bridge..."
+      : "Start QLC Bridge";
   elements.stopSystem.disabled = uiBusy || syncInProgress;
   elements.toggleAudioSetup.disabled = uiBusy;
   elements.openAudioMidiSetup.disabled = uiBusy;

@@ -244,6 +244,11 @@ let lastQlcCapacitySceneCategory = "";
 let lastQlcCapacitySelectedIntent = "";
 let lastQlcCapacityIntensity = 0;
 let lastQlcCapacityLogAt = 0;
+let pendingDesktopQlcBridgeStartPromise = null;
+let desktopQlcBridgeSelectionRequestId = 0;
+let qlcDesktopMirrorUnavailableLogged = false;
+let qlcDesktopMirrorAvailableLogged = false;
+let qlcDesktopBridgeUnavailableLogged = false;
 
 let lights = [];
 let lightStates = [];
@@ -2132,7 +2137,20 @@ function postQlcWeb(path, payload) {
 
 function mirrorQlcWebToDesktop(path, payload) {
   const mirror = window.lightingBrainDesktop?.dmx?.mirrorQlcWeb;
-  if (typeof mirror !== "function") return;
+  if (typeof mirror !== "function") {
+    if (!qlcDesktopMirrorUnavailableLogged) {
+      console.warn("[dmx-dashboard] desktop mirror unavailable; using HTTP bridge only");
+      logEvent("[dmx-dashboard] desktop mirror unavailable; using HTTP bridge only");
+      qlcDesktopMirrorUnavailableLogged = true;
+      qlcDesktopMirrorAvailableLogged = false;
+    }
+    return;
+  }
+  if (!qlcDesktopMirrorAvailableLogged) {
+    console.log("[dmx-dashboard] desktop mirror active");
+    qlcDesktopMirrorAvailableLogged = true;
+    qlcDesktopMirrorUnavailableLogged = false;
+  }
   mirror({ path, payload: payload ?? {} }).catch((error) => {
     console.warn("[dmx-dashboard] mirror failed", error);
   });
@@ -6173,6 +6191,43 @@ function resendStoredFixtureMapToBridge() {
   }
 }
 
+function ensureDesktopQlcBridgeForSelection() {
+  const startQlcBridge = window.lightingBrainDesktop?.system?.startQlcBridge;
+  if (typeof startQlcBridge !== "function") {
+    if (!qlcDesktopBridgeUnavailableLogged) {
+      console.warn("[qlc-web] desktop bridge start unavailable; browser mode will use HTTP bridge only");
+      logEvent("[qlc-web] desktop bridge start unavailable; browser mode will use HTTP bridge only");
+      qlcDesktopBridgeUnavailableLogged = true;
+    }
+    resendStoredFixtureMapToBridge();
+    return Promise.resolve(null);
+  }
+  qlcDesktopBridgeUnavailableLogged = false;
+  if (pendingDesktopQlcBridgeStartPromise) return pendingDesktopQlcBridgeStartPromise;
+
+  const requestId = ++desktopQlcBridgeSelectionRequestId;
+  const pendingPromise = Promise.resolve()
+    .then(() => startQlcBridge())
+    .then((status) => {
+      if (requestId === desktopQlcBridgeSelectionRequestId && qlcWebBridgeActive()) {
+        resendStoredFixtureMapToBridge();
+      }
+      return status;
+    })
+    .catch((error) => {
+      console.warn("[qlc-web] failed to ensure desktop QLC bridge", error);
+      logEvent(`[qlc-web] failed to ensure desktop bridge: ${error.message}`);
+      throw error;
+    })
+    .finally(() => {
+      if (pendingDesktopQlcBridgeStartPromise === pendingPromise) {
+        pendingDesktopQlcBridgeStartPromise = null;
+      }
+    });
+  pendingDesktopQlcBridgeStartPromise = pendingPromise;
+  return pendingPromise;
+}
+
 function buildSetupJson() {
   const fixtures = setupLightState.fixtures.map((fixture) => {
     const channels = Object.entries(fixture.channels)
@@ -6636,7 +6691,7 @@ elements.outputTarget.addEventListener("change", () => {
   }
   if (activeOutputTarget === "qlc_web_bridge") {
     resetQlcWebOutputState("output_selected");
-    resendStoredFixtureMapToBridge();
+    void ensureDesktopQlcBridgeForSelection();
   }
   if (setupLightState.active) renderSetupLightMode();
   logEvent(`output ${elements.outputLabel.textContent}`);

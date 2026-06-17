@@ -22,6 +22,8 @@ const SERVICE_OWNERSHIP = Object.freeze({
   ERROR: "error",
 });
 
+const DEFAULT_QLC_FIXTURE_MAP_PATH = path.join("configs", "current_qlc_fixture_map.json");
+
 class DesktopProcessManager {
   constructor({ projectRoot, pythonCommand = process.env.PYTHON || "python3", legacyAudioRouteManager = null }) {
     this.projectRoot = projectRoot;
@@ -31,6 +33,7 @@ class DesktopProcessManager {
     this.logs = [];
     this.maxLogs = 700;
     this.startPromise = null;
+    this.qlcBridgeStartPromise = null;
     this.stopPromise = null;
     this.syncPromise = null;
     this.syncMessage = null;
@@ -82,16 +85,27 @@ class DesktopProcessManager {
           state: SERVICE_STATES.STOPPED,
           ownership: SERVICE_OWNERSHIP.STOPPED,
           command: this.pythonCommand,
-          args: ["-m", "lighting_brain.qlc_bridge", "--serve", "--bridge-host", "127.0.0.1", "--bridge-port", "8791"],
+          args: [
+            "-m", "lighting_brain.qlc_bridge",
+            "--serve",
+            "--dry-run",
+            "--bridge-host", "127.0.0.1",
+            "--bridge-port", "8791",
+            "--fixture-map", DEFAULT_QLC_FIXTURE_MAP_PATH,
+          ],
           host: "127.0.0.1",
           port: 8791,
-          probePath: "/dmx-state",
-          url: "http://127.0.0.1:8791/dmx-state",
+          probePath: "/health",
+          url: "http://127.0.0.1:8791/health",
           child: null,
           optional: true,
-          expectedJson: (payload) => payload && payload.qlcBridgeStatus === "connected" && Array.isArray(payload.channels),
-          note: "Optional fallback bridge. Start only when QLC+ Web Interface is running on 127.0.0.1:9999.",
+          expectedJson: (payload) => payload && payload.ok === true,
+          note: "Diagnostic dry-run bridge. Keeps DMX Dashboard active even when QLC+ Web Interface on 127.0.0.1:9999 is unavailable.",
           staleMatchers: ["lighting_brain.qlc_bridge", "8791"],
+          startupTimeoutMs: 2500,
+          requiresHealthCheck: true,
+          diagnosticMode: true,
+          dryRun: true,
         },
       ],
       [
@@ -111,6 +125,7 @@ class DesktopProcessManager {
           optional: true,
           externalOnly: true,
           note: "External optional app. Electron reports it but does not start or stop QLC+.",
+          physicalOutputProvider: true,
         },
       ],
     ]);
@@ -142,11 +157,16 @@ class DesktopProcessManager {
   setQlcFixtureMapPath(fixtureMapPath) {
     const service = this.services.get("qlcBridge");
     if (!service) return;
-    const baseArgs = ["-m", "lighting_brain.qlc_bridge", "--serve", "--bridge-host", "127.0.0.1", "--bridge-port", "8791"];
-    service.args = fixtureMapPath ? [...baseArgs, "--fixture-map", fixtureMapPath] : baseArgs;
-    service.note = fixtureMapPath
-      ? `Optional fallback bridge using selected fixture map: ${fixtureMapPath}`
-      : "Optional fallback bridge. Start only when QLC+ Web Interface is running on 127.0.0.1:9999.";
+    const resolvedFixtureMapPath = fixtureMapPath || DEFAULT_QLC_FIXTURE_MAP_PATH;
+    service.args = [
+      "-m", "lighting_brain.qlc_bridge",
+      "--serve",
+      "--dry-run",
+      "--bridge-host", "127.0.0.1",
+      "--bridge-port", "8791",
+      "--fixture-map", resolvedFixtureMapPath,
+    ];
+    service.note = `Diagnostic dry-run bridge using fixture map: ${resolvedFixtureMapPath}`;
   }
 
   async stopSystem({ force = false } = {}) {
@@ -166,6 +186,33 @@ class DesktopProcessManager {
     });
     this.stopPromise = stopPromise;
     return stopPromise;
+  }
+
+  async ensureQlcBridgeStarted() {
+    if (this.isSyncBlocked()) {
+      this.addLog("qlcBridge", "QLC bridge start blocked: refreshing app state after second launch...");
+      return this.getSystemStatus();
+    }
+    if (this.stopPromise) {
+      this.addLog("qlcBridge", "QLC bridge start blocked: system already stopping");
+      return this.getSystemStatus();
+    }
+    if (this.qlcBridgeStartPromise) {
+      this.addLog("qlcBridge", "QLC bridge start already in progress");
+      return this.qlcBridgeStartPromise;
+    }
+    if (this.startPromise) {
+      this.addLog("qlcBridge", "Waiting for system start before ensuring QLC bridge");
+      return this.startPromise.then(() => this.ensureQlcBridgeStarted());
+    }
+
+    const qlcBridgeStartPromise = this.performEnsureQlcBridgeStarted().finally(() => {
+      if (this.qlcBridgeStartPromise === qlcBridgeStartPromise) {
+        this.qlcBridgeStartPromise = null;
+      }
+    });
+    this.qlcBridgeStartPromise = qlcBridgeStartPromise;
+    return qlcBridgeStartPromise;
   }
 
   async refreshAfterSecondInstance({ minBlockMs = 250 } = {}) {
@@ -271,6 +318,40 @@ class DesktopProcessManager {
     return this.getSystemStatus();
   }
 
+  async performEnsureQlcBridgeStarted() {
+    await this.refreshServiceStatuses();
+
+    const qlcBridge = this.requireService("qlcBridge");
+    const qlcPlusWeb = this.requireService("qlcPlusWeb");
+    if (this.serviceIsStarting(qlcBridge)) {
+      this.addLog("qlcBridge", "QLC+ web bridge already starting");
+      return this.getSystemStatus();
+    }
+    if (this.serviceIsHealthy(qlcBridge)) {
+      this.addLog("qlcBridge", "QLC+ web bridge already running");
+      if (!this.serviceIsHealthy(qlcPlusWeb)) {
+        await this.refreshExternalService("qlcPlusWeb");
+      }
+      return this.getSystemStatus();
+    }
+
+    const startedServiceIds = [];
+    try {
+      await this.ensureServiceStarted("qlcBridge", { startedServiceIds });
+      if (!this.serviceIsHealthy(qlcPlusWeb)) {
+        await this.refreshExternalService("qlcPlusWeb");
+      }
+      if (!this.serviceIsHealthy(qlcPlusWeb)) {
+        this.addLog("qlcBridge", "QLC+ Web Interface on 127.0.0.1:9999 is unavailable; keeping diagnostic dry-run bridge active for DMX Dashboard");
+      }
+      return this.getSystemStatus();
+    } catch (error) {
+      this.addLog("qlcBridge", `start failed: ${error.message}`);
+      await this.stopOwnedServices(startedServiceIds);
+      return this.getSystemStatus();
+    }
+  }
+
   async ensureServiceStarted(id, { startedServiceIds = [] } = {}) {
     const service = this.requireService(id);
     if (this.serviceIsStarting(service)) {
@@ -299,6 +380,28 @@ class DesktopProcessManager {
       await this.refreshExternalService(id);
       return;
     }
+    if (service.child && childIsAlive(service.child) && [SERVICE_STATES.STARTING, SERVICE_STATES.RUNNING].includes(service.state)) {
+      if (!service.requiresHealthCheck) {
+        this.addLog(id, `already ${service.state}, keeping owned process pid=${service.child.pid}`);
+        return;
+      }
+      const ownedProbe = await this.probeService(service);
+      if (ownedProbe.expected) {
+        this.addLog(id, `already ${service.state}, keeping owned process pid=${service.child.pid}`);
+        return;
+      }
+      service.state = SERVICE_STATES.ERROR;
+      service.ownership = SERVICE_OWNERSHIP.ERROR;
+      service.error = `owned process pid=${service.child.pid} is alive but health check failed: ${ownedProbe.detail || "no response"}`;
+      this.addLog(id, service.error);
+      await this.stopService(id);
+    } else if (service.child && childIsAlive(service.child)) {
+      this.addLog(id, `stopping unhealthy owned process before restart pid=${service.child.pid}`);
+      await this.stopService(id);
+    } else if (service.child) {
+      service.child = null;
+    }
+
     if (service.child && [SERVICE_STATES.STARTING, SERVICE_STATES.RUNNING].includes(service.state)) {
       this.addLog(id, `already ${service.state}, keeping owned process pid=${service.child.pid}`);
       return;
@@ -363,11 +466,13 @@ class DesktopProcessManager {
       return;
     }
 
-    this.addLog(id, `spawn: ${service.command} ${service.args.join(" ")}`);
     const env = {
       ...process.env,
       PYTHONPATH: joinPathList(path.join(this.projectRoot, "src"), process.env.PYTHONPATH),
     };
+    this.addLog(id, `spawn cwd=${this.projectRoot}`);
+    this.addLog(id, `spawn PYTHONPATH=${env.PYTHONPATH}`);
+    this.addLog(id, `spawn command=${formatCommandForLog(service.command, service.args)}`);
     const child = spawn(service.command, service.args, {
       cwd: this.projectRoot,
       env,
@@ -382,9 +487,9 @@ class DesktopProcessManager {
     child.stdout.on("data", (chunk) => this.addLog(id, chunk.toString("utf8").trimEnd()));
     child.stderr.on("data", (chunk) => this.addLog(id, chunk.toString("utf8").trimEnd()));
     child.on("spawn", () => {
-      service.state = SERVICE_STATES.RUNNING;
+      service.state = SERVICE_STATES.STARTING;
       service.error = null;
-      this.addLog(id, `running pid=${child.pid}`);
+      this.addLog(id, `spawned pid=${child.pid}; waiting for health`);
     });
     child.on("error", (error) => {
       service.state = SERVICE_STATES.ERROR;
@@ -396,6 +501,7 @@ class DesktopProcessManager {
     child.on("exit", (code, signal) => {
       const wasStopping = service.state === SERVICE_STATES.STOPPING;
       service.child = null;
+      service.lastExit = { code, signal, time: new Date().toISOString() };
       service.state = wasStopping || code === 0 ? SERVICE_STATES.STOPPED : SERVICE_STATES.ERROR;
       service.ownership = service.state === SERVICE_STATES.STOPPED
         ? SERVICE_OWNERSHIP.STOPPED
@@ -403,6 +509,56 @@ class DesktopProcessManager {
       service.error = service.state === SERVICE_STATES.ERROR ? `exit code=${code} signal=${signal}` : null;
       this.addLog(id, `exit code=${code} signal=${signal}`);
     });
+
+    const readiness = await this.waitForServiceReadiness(service, child);
+    if (!readiness.ok) {
+      service.state = readiness.state || SERVICE_STATES.ERROR;
+      service.ownership = readiness.state === SERVICE_STATES.STOPPED
+        ? SERVICE_OWNERSHIP.STOPPED
+        : SERVICE_OWNERSHIP.ERROR;
+      service.error = readiness.error;
+      this.addLog(id, readiness.error);
+      if (service.child && service.child === child) {
+        await this.stopService(id);
+        service.state = SERVICE_STATES.ERROR;
+        service.ownership = SERVICE_OWNERSHIP.ERROR;
+        service.error = readiness.error;
+      }
+      if (!service.optional) throw new Error(readiness.error);
+      return;
+    }
+
+    service.state = SERVICE_STATES.RUNNING;
+    service.error = null;
+    this.addLog(id, `running pid=${child.pid} health=${service.probePath || "/"}`);
+  }
+
+  async waitForServiceReadiness(service, child) {
+    const timeoutMs = service.startupTimeoutMs || 4000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return {
+          ok: false,
+          state: SERVICE_STATES.ERROR,
+          error: `process exited before health check passed (exit=${child.exitCode} signal=${child.signalCode})`,
+        };
+      }
+      const probe = await this.probeService(service);
+      if (probe.expected) {
+        return { ok: true };
+      }
+      await sleep(120);
+    }
+    const probe = await this.probeService(service);
+    if (probe.expected) {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      state: probe.occupied ? SERVICE_STATES.ERROR : SERVICE_STATES.STOPPED,
+      error: `health check failed after spawn on ${service.probePath || "/"}: ${probe.detail || "no response"}`,
+    };
   }
 
   async refreshOptionalService(id) {
@@ -587,8 +743,29 @@ class DesktopProcessManager {
         await this.refreshExternalService(id);
         continue;
       }
-      if (service.child && [SERVICE_STATES.STARTING, SERVICE_STATES.RUNNING, SERVICE_STATES.STOPPING].includes(service.state)) {
+      if (service.child && service.state === SERVICE_STATES.STOPPING) {
         continue;
+      }
+      if (service.child && childIsAlive(service.child) && [SERVICE_STATES.STARTING, SERVICE_STATES.RUNNING].includes(service.state)) {
+        if (!service.requiresHealthCheck || (service.state === SERVICE_STATES.STARTING && this.qlcBridgeStartPromise)) {
+          continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const ownedProbe = await this.probeService(service);
+        if (ownedProbe.expected) {
+          service.state = SERVICE_STATES.RUNNING;
+          service.ownership = SERVICE_OWNERSHIP.OWNED;
+          service.error = null;
+          continue;
+        }
+        service.state = SERVICE_STATES.ERROR;
+        service.ownership = SERVICE_OWNERSHIP.ERROR;
+        service.error = `Owned process pid=${service.child.pid} failed health check: ${ownedProbe.detail || "no response"}`;
+        this.addLog(id, service.error);
+        continue;
+      }
+      if (service.child && !childIsAlive(service.child)) {
+        service.child = null;
       }
       // eslint-disable-next-line no-await-in-loop
       const probe = await this.probeService(service);
@@ -623,6 +800,7 @@ class DesktopProcessManager {
       if (service.state === SERVICE_STATES.ERROR) hasErrorService = true;
       services[id] = {
         id,
+        status: service.state,
         label: service.label,
         state: service.state,
         ownership: service.ownership,
@@ -639,6 +817,23 @@ class DesktopProcessManager {
         recentLogs: this.logs.filter((entry) => entry.serviceId === id).slice(-12),
       };
     }
+    const qlcBridgeStatus = this.buildQlcBridgeStatus(services);
+    if (services.qlcBridge) {
+      services.qlcBridge.statusDetails = [
+        `QLC bridge 8791: ${qlcBridgeStatus.bridge8791}`,
+        `QLC+ Web Interface 9999: ${qlcBridgeStatus.qlcPlusWeb9999}`,
+        `Real physical QLC+ output: ${qlcBridgeStatus.physicalQlcOutput}`,
+        `DMX Dashboard diagnostic mirror: ${qlcBridgeStatus.diagnosticMirror}`,
+        "Mode: dry-run diagnostics",
+      ];
+    }
+    if (services.qlcPlusWeb) {
+      services.qlcPlusWeb.statusDetails = [
+        `QLC+ Web Interface 9999: ${qlcBridgeStatus.qlcPlusWeb9999}`,
+        `Real physical QLC+ output: ${qlcBridgeStatus.physicalQlcOutput}`,
+      ];
+    }
+
     const requiredHealthy = ["webFrontend", "liveAudio"]
       .every((id) => services[id]?.healthy === true);
 
@@ -660,6 +855,8 @@ class DesktopProcessManager {
       systemState,
       startInProgress: Boolean(this.startPromise),
       stopInProgress: Boolean(this.stopPromise),
+      qlcBridgeStartInProgress: Boolean(this.qlcBridgeStartPromise),
+      qlcBridgeStatus,
       syncInProgress: this.isSyncBlocked(),
       syncMessage: this.syncMessage,
       services,
@@ -689,6 +886,24 @@ class DesktopProcessManager {
     const service = this.services.get(id);
     if (!service) throw new Error(`Unknown desktop service: ${id}`);
     return service;
+  }
+
+  buildQlcBridgeStatus(services) {
+    const bridge = services.qlcBridge;
+    const qlcPlusWeb = services.qlcPlusWeb;
+    const bridgeRunning = bridge?.healthy === true;
+    const qlcPlusWebAvailable = qlcPlusWeb?.healthy === true;
+    return {
+      bridge8791: bridgeRunning ? "running" : (bridge?.state || SERVICE_STATES.STOPPED),
+      qlcPlusWeb9999: qlcPlusWebAvailable ? "available" : "unavailable",
+      physicalQlcOutput: qlcPlusWebAvailable ? "available" : "unavailable",
+      diagnosticMirror: bridgeRunning ? "available" : "available via desktop IPC mirror when dashboard is open",
+      diagnosticMode: true,
+      dryRun: true,
+      message: qlcPlusWebAvailable
+        ? "QLC bridge 8791 is in dry-run diagnostic mode; QLC+ Web Interface 9999 is reachable."
+        : "QLC bridge 8791 uses dry-run diagnostics; QLC+ Web Interface 9999 and real physical QLC+ output are unavailable.",
+    };
   }
 
   async killProcesses(processes, { serviceId, reason, force = false }) {
@@ -781,6 +996,16 @@ function probeHttpService({ host, port, path: probePath, expectedJson, expectedC
 
 function joinPathList(first, existing) {
   return existing ? `${first}${path.delimiter}${existing}` : first;
+}
+
+function formatCommandForLog(command, args = []) {
+  return [command, ...args]
+    .map((part) => (/\s/u.test(String(part)) ? JSON.stringify(String(part)) : String(part)))
+    .join(" ");
+}
+
+function childIsAlive(child) {
+  return Boolean(child) && child.exitCode === null && child.signalCode === null && !child.killed;
 }
 
 function terminateChild(child) {
@@ -900,4 +1125,5 @@ module.exports = {
   DesktopProcessManager,
   SERVICE_OWNERSHIP,
   SERVICE_STATES,
+  DEFAULT_QLC_FIXTURE_MAP_PATH,
 };

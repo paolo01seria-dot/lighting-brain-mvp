@@ -25,6 +25,9 @@ output/
 *.log
 *.tmp
 
+# Runtime-generated diagnostic fixture map
+configs/current_qlc_fixture_map.json
+
 # Local analysis outputs
 analysis/*.json
 

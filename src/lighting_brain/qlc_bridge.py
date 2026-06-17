@@ -121,7 +121,87 @@ def load_fixtures(path=None):
     return DEFAULT_FIXTURES
   with open(path, "r", encoding="utf-8") as handle:
     data = json.load(handle)
-  return data.get("fixtures", data) if isinstance(data, dict) else data
+  if isinstance(data, list):
+    return normalize_fixture_map(data)
+  if not isinstance(data, dict):
+    raise ValueError("fixture map must be a list or object")
+
+  qlc_fixtures = data.get("qlcFixtures")
+  if isinstance(qlc_fixtures, list) and qlc_fixtures:
+    return normalize_fixture_map(qlc_fixtures)
+
+  fixtures = data.get("fixtures")
+  if isinstance(fixtures, list) and fixtures:
+    if fixtures_are_normalized(fixtures):
+      return normalize_fixture_map(fixtures)
+    return normalize_fixture_map([fixture_from_setup_light_payload(fixture) for fixture in fixtures])
+
+  raise ValueError("fixture map payload must contain qlcFixtures or fixtures")
+
+
+def fixtures_are_normalized(fixtures):
+  return all(
+    isinstance(fixture, dict)
+    and fixture.get("id")
+    and fixture.get("address") is not None
+    and fixture.get("channels") is not None
+    and not isinstance(fixture.get("channels"), list)
+    for fixture in fixtures
+  )
+
+
+def fixture_from_setup_light_payload(fixture):
+  converted = {
+    "id": fixture["id"],
+    "label": fixture.get("label", fixture["id"]),
+    "address": fixture.get("startChannel", fixture.get("address")),
+    "channels": fixture.get("channelCount", fixture.get("channels")),
+    "map": {},
+    "rgb": {},
+  }
+  role_counts = {}
+  channels = fixture.get("channels", [])
+  if not isinstance(channels, list):
+    raise ValueError("setup-light fixture channels must be a list when address/channels are not normalized")
+  for channel in sorted(channels, key=lambda item: int(item.get("local", 0))):
+    role = channel.get("role")
+    local = int(channel.get("local", 0))
+    if not role or role in {"unknown", "off"} or local <= 0:
+      continue
+    role_counts[role] = role_counts.get(role, 0) + 1
+    occurrence = role_counts[role]
+    if role in {"red", "green", "blue"}:
+      key = {"red": "r", "green": "g", "blue": "b"}[role]
+      if occurrence == 1:
+        converted["rgb"][key] = local
+        converted["map"][key] = local
+      elif occurrence == 2:
+        converted.setdefault("rgb2", {})[key] = local
+        converted["map"][f"{key}2"] = local
+    elif role == "white":
+      key = "white" if occurrence == 1 else "white2"
+      converted[key] = local
+      converted["map"][key] = local
+    else:
+      converted[role] = local
+      converted["map"][role] = local
+  if not converted["rgb"]:
+    converted.pop("rgb")
+  return converted
+
+
+def normalize_fixture_map(fixtures):
+  normalized = []
+  for fixture in fixtures:
+    normalized.append({
+      **fixture,
+      "address": int(fixture["address"]),
+      "channels": int(fixture["channels"]),
+      "rgb": dict(fixture["rgb"]) if fixture.get("rgb") else fixture.get("rgb"),
+      "rgb2": dict(fixture["rgb2"]) if fixture.get("rgb2") else fixture.get("rgb2"),
+      "map": dict(fixture["map"]) if fixture.get("map") else fixture.get("map"),
+    })
+  return normalized
 
 
 class QLCWebClient:
@@ -145,6 +225,7 @@ class QLCWebClient:
     self.channels = [0] * 512
     self.events = []
     self.fixture_map_source = "qlc_bridge_default"
+    self.bridge_status = "dry-run diagnostics active; QLC+ web interface not required" if dry_run else "bridge active; QLC+ delivery not yet verified"
 
   def set_fixtures(self, fixtures):
     if not isinstance(fixtures, list) or not fixtures:
@@ -371,8 +452,8 @@ class QLCWebClient:
       "size": 512,
       "outputMode": "qlc_bridge",
       "driver": "QLCWebBridge",
-      "driverStatus": "mirroring live QLC bridge state",
-      "qlcBridgeStatus": "connected",
+      "driverStatus": self.bridge_status,
+      "qlcBridgeStatus": self.bridge_status,
       "fixtureMapSource": self.fixture_map_source,
       "fixtures": len(self.fixtures),
       "channels": channels,
@@ -513,7 +594,12 @@ def make_bridge_server(client, host, port):
       parsed = urlparse(self.path)
       print(f"[qlc] GET {self.path}")
       if parsed.path == "/health":
-        self.write_json({"ok": True, "fixtures": len(client.fixtures), "dry_run": client.dry_run})
+        self.write_json({
+          "ok": True,
+          "fixtures": len(client.fixtures),
+          "dry_run": client.dry_run,
+          "qlcBridgeStatus": client.bridge_status,
+        })
         return
       if parsed.path == "/dmx-state":
         self.write_json(client.dmx_state())

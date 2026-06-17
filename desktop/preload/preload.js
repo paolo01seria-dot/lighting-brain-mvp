@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("lightingBrainDesktop", {
   },
   system: {
     startSystem: () => ipcRenderer.invoke("desktop:system:start"),
+    startQlcBridge: () => ipcRenderer.invoke("desktop:system:start-qlc-bridge"),
     stopSystem: () => ipcRenderer.invoke("desktop:system:stop"),
     getSystemStatus: () => ipcRenderer.invoke("desktop:system:get-status"),
     getLogs: () => ipcRenderer.invoke("desktop:system:get-logs"),

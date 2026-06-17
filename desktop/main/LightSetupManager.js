@@ -76,8 +76,12 @@ class LightSetupManager {
       return { ok: false, error: summary.error || "Setup is invalid", status: this.refresh() };
     }
     fs.mkdirSync(path.dirname(this.selectionPath), { recursive: true });
+    const relativeSetupPath = path.relative(this.projectRoot, absolutePath);
+    const selectedSetupPath = relativeSetupPath && !relativeSetupPath.startsWith("..") && !path.isAbsolute(relativeSetupPath)
+      ? relativeSetupPath
+      : absolutePath;
     fs.writeFileSync(this.selectionPath, `${JSON.stringify({
-      selectedSetupPath: absolutePath,
+      selectedSetupPath,
       selectedAt: new Date().toISOString(),
     }, null, 2)}\n`);
     this.current = summary;

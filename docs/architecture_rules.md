@@ -95,3 +95,80 @@ the same adapter.
 Offline file analysis can expose a waveform/spectrogram-style overview before
 playback. That visual map is useful for labeling intros, buildups, drops and
 sparse arpeggiated sections, then later feeding better section detection.
+
+## Canonical Light State
+
+All subsystems must communicate light behavior through one normalized canonical state.
+
+The canonical state is the only source for:
+
+- browser rendering;
+- review rendering;
+- training editing;
+- QLC Bridge;
+- direct DMX output.
+
+Brain output, UI state and DMX state must not use incompatible parallel representations.
+
+## Rendering separation
+
+The following are separate concerns:
+
+1. semantic scene state;
+2. effective playback state;
+3. pause/edit representation;
+4. UI overlays;
+5. hardware output.
+
+For first-half and second-half impulses:
+
+- editing may show a half lens or phase control;
+- playback must produce the actual timed impulse;
+- DMX output must receive the same timed meaning;
+- UI phase controls must never become autonomous lighting events.
+
+## Process ownership
+
+Every long-running subsystem must have one owner.
+
+This includes:
+
+- audio capture;
+- live analysis;
+- QLC Bridge;
+- direct DMX output;
+- timers;
+- event listeners;
+- device handles.
+
+Start and stop operations must be idempotent.
+
+No duplicate managers, listeners, timers, bridge processes or device owners are allowed.
+
+## Mode isolation
+
+Training, Review, Listen, Setup Light and Launcher are distinct modes.
+
+Changing mode must invalidate incompatible transient state.
+
+Training frames, review audio, manual overrides and editing overlays must not leak into live listening.
+
+## Output responsibility
+
+The brain decides lighting intent.
+
+Fixture mapping translates the intent into fixture channels.
+
+Output adapters transmit channel values or bridge commands.
+
+No hardware adapter may contain musical decision logic.
+
+## Device safety
+
+Output adapters must:
+
+- prevent concurrent ownership;
+- validate values;
+- expose health state;
+- clean up on stop, quit and error;
+- enter a defined safe state after failure.

@@ -133,8 +133,9 @@
       .output-timeline .source-timeline-control { display: flex !important; }
       .output-timeline .source-file-control { display: none !important; }
       .output-qlc-web .qlc-web-control { display: grid !important; }
-      .setup-dmx-panel, .setup-action { display: none; }
-      .setup-light-mode .spectrum-shell, .setup-light-mode .review-play-button, .setup-light-mode .hidden-seek, .setup-light-mode .training-duration-control, .setup-light-mode .sample-control, .setup-light-mode .range-control, .setup-light-mode .source-file-control, .setup-light-mode .source-timeline-control, .setup-light-mode .device-control, .setup-light-mode .audio-device-summary-control, .setup-light-mode .training-switch, .setup-light-mode .cue-editor, .setup-light-mode #currentTimeLabel, .setup-light-mode #durationLabel, .setup-light-mode label:has(#genreProfile), .setup-light-mode #saveAnnotationButton, .setup-light-mode #blackoutSceneButton, .setup-light-mode #copySceneButton, .setup-light-mode #pasteSceneButton, .setup-light-mode #downloadAnnotationsButton, .setup-light-mode #clearTrainingLightsButton { display: none !important; }
+      .setup-dmx-panel, .setup-action, .setup-library-panel { display: none; }
+      .setup-light-mode .spectrum-shell, .setup-light-mode .review-play-button, .setup-light-mode .hidden-seek, .setup-light-mode .training-duration-control, .setup-light-mode .sample-control, .setup-light-mode .range-control, .setup-light-mode .source-file-control, .setup-light-mode .source-timeline-control, .setup-light-mode .device-control, .setup-light-mode .audio-device-summary-control, .setup-light-mode .training-switch, .setup-light-mode .cue-editor, .setup-light-mode #currentTimeLabel, .setup-light-mode #durationLabel, .setup-light-mode label:has(#inputSource), .setup-light-mode label:has(#outputTarget), .setup-light-mode .qlc-web-control, .setup-light-mode label:has(#genreProfile), .setup-light-mode #saveAnnotationButton, .setup-light-mode #blackoutSceneButton, .setup-light-mode #copySceneButton, .setup-light-mode #pasteSceneButton, .setup-light-mode #downloadAnnotationsButton, .setup-light-mode #clearTrainingLightsButton { display: none !important; }
+      .setup-light-mode .setup-library-panel { display: grid; }
       .setup-light-mode .setup-dmx-panel { display: grid; }
       .setup-light-mode .setup-action { display: inline-flex; }
       .setup-light-phase-fixture-channels #setupSaveButton, .setup-light-phase-fixture-channels .setup-dmx-panel { display: none !important; }
@@ -146,6 +147,20 @@
       .light.is-off, .light.blackout { --beam: transparent !important; --beam-opacity: 0 !important; }
       .is-mic-mode .device-control { display: none !important; }
       .is-mic-mode .audio-device-summary-control { display: grid !important; }
+      .setup-library-panel { margin: 0 14px 12px; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(13,16,17,.84); }
+      .setup-library-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .setup-library-header h2 { margin: 0 0 4px; font-size: 17px; }
+      .setup-library-header p { margin: 0; color: rgba(245,247,248,.68); font-size: 12px; }
+      .setup-library-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+      .setup-library-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+      .setup-library-summary article, .setup-library-item { border: 1px solid rgba(255,255,255,.08); border-radius: 10px; background: rgba(255,255,255,.035); padding: 10px; }
+      .setup-library-summary strong, .setup-library-summary span { display: block; overflow-wrap: anywhere; }
+      .setup-library-summary span, .setup-library-item small, .setup-library-item span { color: rgba(245,247,248,.7); }
+      .setup-library-list { display: grid; gap: 8px; }
+      .setup-library-item { display: grid; width: 100%; gap: 4px; text-align: left; }
+      .setup-library-item.is-current { border-color: rgba(79,195,177,.68); }
+      .setup-library-item.is-selected { box-shadow: 0 0 0 1px rgba(255,196,87,.52); }
+      .setup-library-item.is-invalid { border-color: rgba(255,139,150,.5); }
       .spectrum-shell { display: grid; grid-template-columns: 62px minmax(0, 1fr); min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: #0d1011; }
       .spectrum-labels { display: grid; grid-template-rows: repeat(4, 1fr); height: 168px; padding-left: 8px; background: rgba(13,16,17,.38); color: rgba(245,247,248,.76); font-size: 11px; pointer-events: none; }
       .spectrum-labels span { display: flex; align-items: center; }
@@ -338,6 +353,22 @@
           <input id="seekSlider" class="hidden-seek" type="range" min="0" max="1000" value="0" disabled>
           <span id="durationLabel">0:00</span>
         </div>
+      </section>
+
+      <section id="setupLibraryPanel" class="setup-library-panel" aria-label="Light Setup library">
+        <div class="setup-library-header">
+          <div>
+            <h2>Light Setup Library</h2>
+            <p>Select the saved fixture/DMX setup used by Start System, DMX Dashboard, and output diagnostics.</p>
+          </div>
+          <div class="setup-library-actions">
+            <button id="setupLibraryRefresh" type="button">Refresh Setups</button>
+            <button id="setupLibraryValidate" type="button">Validate Selected</button>
+            <button id="setupLibrarySetCurrent" type="button">Set Current</button>
+          </div>
+        </div>
+        <div id="setupLibrarySummary" class="setup-library-summary"></div>
+        <div id="setupLibraryList" class="setup-library-list"></div>
       </section>
 
       <section class="tester-layout">

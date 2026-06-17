@@ -90,7 +90,7 @@ test("waitForServiceReadiness fails when health never comes up", async () => {
   assert.match(result.error, /health check failed after spawn/);
 });
 
-test("system status distinguishes diagnostic bridge from unavailable physical QLC output", () => {
+test("system status reports diagnostic bridge without requiring QLC+", () => {
   const manager = new DesktopProcessManager({
     projectRoot: process.cwd(),
   });
@@ -101,8 +101,8 @@ test("system status distinguishes diagnostic bridge from unavailable physical QL
   const status = manager.getSystemStatus();
 
   assert.equal(status.qlcBridgeStatus.bridge8791, "running");
-  assert.equal(status.qlcBridgeStatus.qlcPlusWeb9999, "unavailable");
-  assert.equal(status.qlcBridgeStatus.physicalQlcOutput, "unavailable");
+  assert.equal(status.qlcBridgeStatus.physicalOutput, "not managed in diagnostic mode");
   assert.equal(status.qlcBridgeStatus.dryRun, true);
-  assert.ok(status.services.qlcBridge.statusDetails.includes("Real physical QLC+ output: unavailable"));
+  assert.equal(status.services.qlcPlusWeb, undefined);
+  assert.ok(status.services.qlcBridge.statusDetails.includes("Mode: dry-run diagnostics"));
 });

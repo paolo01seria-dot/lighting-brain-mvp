@@ -1,143 +1,151 @@
 # Bridge Software Targets
 
-## Perche' ci serve un bridge software
+## Ruolo dei bridge
 
-Il nostro cervello musicale non deve sapere subito come parlare con ogni cavo
-USB-DMX. Deve produrre eventi luci e mandarli a un software ponte che conosce
-fixture, patch, universi e hardware.
+Un bridge software collega l'output semantico o DMX del progetto a un software o dispositivo esterno.
 
-## Criteri di scelta
+Il bridge non deve contenere logica musicale.
 
-Valutiamo ogni programma su due assi separati:
+Deve limitarsi a:
 
-1. Compatibilita' hardware: quanti cavi/interfacce USB-DMX, Art-Net o sACN
-   supporta.
-2. Pilotabilita': quanto e' facile controllarlo da fuori con OSC, MIDI, Art-Net,
-   timecode o altri meccanismi.
+* ricevere stato o frame;
+* tradurlo nel protocollo previsto;
+* controllare la connessione;
+* riportare stato ed errori;
+* chiudere correttamente le risorse.
 
-Un programma puo' essere ottimo con hardware economico ma scomodo da pilotare,
-o viceversa.
+## QLC+
 
-## Candidati
+QLC+ è il bridge software principale supportato nella beta 0.1, ma non deve essere considerato una dipendenza permanente dell'intero prodotto.
 
-### QLC+
+Ruoli di QLC+:
 
-Ruolo consigliato: primo target cross-platform.
+* fallback per output DMX;
+* verifica hardware;
+* supporto a plugin e dispositivi già compatibili;
+* patch e fixture definition durante lo sviluppo;
+* diagnosi del cavo e delle luci;
+* percorso alternativo quando il direct adapter non è disponibile.
 
-Pro:
+## QLC Bridge locale
 
-- open source
-- macOS, Windows, Linux
-- supporta molte interfacce FTDI/Open DMX/Pro/DMXKing
-- supporta input/output e universi multipli
-- ha MIDI, OSC, Art-Net e sACN come strade realistiche di integrazione
+Il progetto deve possedere un QLC Bridge controllabile dal launcher.
 
-Contro:
+Funzioni minime:
 
-- UI tecnica
-- alcune configurazioni economiche possono richiedere tuning
-- meno orientato al workflow DJ rispetto a software commerciali
+* Start;
+* Stop;
+* Restart controllato;
+* Status;
+* Health check;
+* visualizzazione dell'errore;
+* configurazione host, porta e protocollo;
+* prevenzione doppia istanza;
+* cleanup alla chiusura;
+* riconnessione controllata.
 
-Uso nel nostro progetto:
+Il bridge non deve partire due volte se l'utente preme ripetutamente Start.
 
-- target principale per MVP
-- primo adapter: OSC o MIDI per trigger scene
-- poi Art-Net/sACN se vogliamo lavorare piu' vicino ai canali
+Non deve restare un processo orfano dopo quit o crash gestito.
 
-### FreeStyler DMX
+## Modalità di avvio
 
-Ruolo consigliato: target interessante soprattutto per Windows e cavi economici.
+Il launcher deve permettere almeno:
 
-Pro:
+* avvio manuale del QLC Bridge;
+* arresto manuale;
+* avvio automatico opzionale con Start System;
+* uso del sistema senza QLC Bridge quando è selezionato un direct adapter o il solo simulatore.
 
-- molto usato in ambito hobby/DJ
-- supporta numerose interfacce USB-DMX economiche
-- supporta Art-Net
-- supporta MIDI/controller
+L'avvio automatico non deve essere nascosto o obbligatorio.
 
-Contro:
+## Stato mostrato nel launcher
 
-- Windows-centric
-- meno moderno
-- integrazione esterna da verificare con test pratici
-- non e' la base migliore per Mac-first development
+Stati minimi:
 
-Uso nel nostro progetto:
-
-- secondo target da testare quando passiamo al PC Windows
-- probabilmente via MIDI o Art-Net
-- utile per capire se cavi economici non supportati bene da QLC+ funzionano
-  meglio li'
-
-### ChamSys MagicQ
-
-Ruolo consigliato: riferimento semi-pro/pro, non primo target economico.
-
-Pro:
-
-- molto potente
-- Art-Net/sACN solidi
-- workflow professionale
-
-Contro:
-
-- alcune funzioni/input possono essere limitate senza hardware/licenze ChamSys
-- meno adatto come ponte economico universale
-- complessita' alta
-
-Uso nel nostro progetto:
-
-- target futuro per validare compatibilita' pro
-- meglio via Art-Net/sACN o MIDI/timecode dove consentito
-
-### Lightkey
-
-Ruolo consigliato: target Mac interessante per UI moderna.
-
-Pro:
-
-- interfaccia piu' moderna
-- buono per show piccoli/medi
-- supporta trigger esterni e hardware comuni
-
-Contro:
-
-- Mac-only
-- commerciale
-- meno aperto di QLC+
-
-Uso nel nostro progetto:
-
-- possibile confronto UX
-- non primo target per MVP open/economico
-
-## Scelta attuale
-
-La scelta per ora e':
-
-1. QLC+ come bridge principale.
-2. FreeStyler come bridge Windows/economico da testare.
-3. Art-Net/MIDI/OSC come adapter, non come vincolo unico.
-
-## Strategia adapter
-
-Il cervello deve produrre sempre lo stesso formato interno:
-
-```json
-{
-  "time": 64.0,
-  "scene": "techno_peak_white_drive",
-  "intent": "peak_energy"
-}
+```text
+Stopped
+Starting
+Running
+Connected
+Disconnected
+Error
 ```
 
-Poi un adapter decide come inviarlo:
+È necessario distinguere:
 
-- `qlcplus_osc`
-- `qlcplus_midi`
-- `qlcplus_artnet`
-- `freestyler_midi`
-- `freestyler_artnet`
-- `magicq_artnet`
+* processo bridge avviato;
+* QLC+ raggiungibile;
+* dispositivo DMX disponibile;
+* output effettivamente operativo.
 
-In questo modo possiamo cambiare software ponte senza rifare il cervello.
+`Running` non significa automaticamente che le luci siano raggiungibili.
+
+## Configurazione
+
+La configurazione deve includere:
+
+* output mode;
+* protocollo;
+* host;
+* porta;
+* universe, se applicabile;
+* setup fixture attivo;
+* dispositivo selezionato;
+* eventuale frequenza output;
+* comportamento in caso di errore.
+
+Universe e output frequency sono configurabili e non devono essere fissati rigidamente.
+
+## Target hardware beta 0.1
+
+Il dispositivo prioritario è:
+
+```text
+FT232R USB UART
+Serial number: BG03EQH8
+```
+
+Il launcher deve mostrare separatamente:
+
+* rilevato dal sistema operativo;
+* disponibile;
+* occupato;
+* riconosciuto da QLC+;
+* compatibile con direct adapter;
+* non supportato;
+* errore.
+
+## Direct adapter e QLC fallback
+
+La selezione dell'output deve seguire questa logica:
+
+```text
+Direct adapter disponibile e configurato
+-> usa direct output
+
+Direct adapter non disponibile, ma QLC+ è disponibile
+-> usa QLC Bridge
+
+Nessuno dei due disponibile
+-> blocca output reale e mostra errore
+```
+
+Il fallback non deve avvenire silenziosamente. Il launcher deve indicare chiaramente quale percorso è attivo.
+
+## Altri bridge
+
+Altri target possono essere aggiunti in futuro tramite adapter:
+
+* FreeStyler;
+* Art-Net node;
+* sACN node;
+* DMXKing;
+* Enttec;
+* altri software o dispositivi.
+
+Non devono essere inseriti nel core come casi speciali.
+
+## Principio
+
+Il bridge è un mezzo di trasporto, non il cervello e non la fonte dello stato delle luci.

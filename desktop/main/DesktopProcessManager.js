@@ -100,32 +100,12 @@ class DesktopProcessManager {
           child: null,
           optional: true,
           expectedJson: (payload) => payload && payload.ok === true,
-          note: "Diagnostic dry-run bridge. Keeps DMX Dashboard active even when QLC+ Web Interface on 127.0.0.1:9999 is unavailable.",
+          note: "Diagnostic dry-run bridge for the DMX Dashboard. Does not require QLC+.",
           staleMatchers: ["lighting_brain.qlc_bridge", "8791"],
           startupTimeoutMs: 2500,
           requiresHealthCheck: true,
           diagnosticMode: true,
           dryRun: true,
-        },
-      ],
-      [
-        "qlcPlusWeb",
-        {
-          id: "qlcPlusWeb",
-          label: "QLC+ Web Interface",
-          state: SERVICE_STATES.STOPPED,
-          ownership: SERVICE_OWNERSHIP.EXTERNAL,
-          command: null,
-          args: [],
-          host: "127.0.0.1",
-          port: 9999,
-          probePath: "/",
-          url: "http://127.0.0.1:9999",
-          child: null,
-          optional: true,
-          externalOnly: true,
-          note: "External optional app. Electron reports it but does not start or stop QLC+.",
-          physicalOutputProvider: true,
         },
       ],
     ]);
@@ -250,7 +230,6 @@ class DesktopProcessManager {
     const webFrontend = this.requireService("webFrontend");
     const liveAudio = this.requireService("liveAudio");
     const qlcBridge = this.requireService("qlcBridge");
-    const qlcPlusWeb = this.requireService("qlcPlusWeb");
 
     if (this.serviceIsStarting(webFrontend) || this.serviceIsStarting(liveAudio)) {
       this.addLog("system", "System already starting");
@@ -264,9 +243,6 @@ class DesktopProcessManager {
 
     if (webHealthy && liveHealthy && (!includeQlcBridge || qlcBridgeHealthy || qlcBridgeStarting)) {
       this.addLog("system", "System already running");
-      if (!this.serviceIsHealthy(qlcPlusWeb)) {
-        await this.refreshExternalService("qlcPlusWeb");
-      }
       return this.getSystemStatus();
     }
 
@@ -282,10 +258,6 @@ class DesktopProcessManager {
 
       await this.ensureServiceStarted("webFrontend", { startedServiceIds });
       await this.ensureServiceStarted("liveAudio", { startedServiceIds });
-
-      if (!this.serviceIsHealthy(qlcPlusWeb)) {
-        await this.refreshExternalService("qlcPlusWeb");
-      }
 
       if (includeQlcBridge) {
         await this.ensureServiceStarted("qlcBridge", { startedServiceIds });
@@ -314,7 +286,6 @@ class DesktopProcessManager {
         this.addLog("legacyAudio", restore.warning);
       }
     }
-    await this.refreshExternalService("qlcPlusWeb");
     return this.getSystemStatus();
   }
 
@@ -322,28 +293,19 @@ class DesktopProcessManager {
     await this.refreshServiceStatuses();
 
     const qlcBridge = this.requireService("qlcBridge");
-    const qlcPlusWeb = this.requireService("qlcPlusWeb");
     if (this.serviceIsStarting(qlcBridge)) {
       this.addLog("qlcBridge", "QLC+ web bridge already starting");
       return this.getSystemStatus();
     }
     if (this.serviceIsHealthy(qlcBridge)) {
       this.addLog("qlcBridge", "QLC+ web bridge already running");
-      if (!this.serviceIsHealthy(qlcPlusWeb)) {
-        await this.refreshExternalService("qlcPlusWeb");
-      }
       return this.getSystemStatus();
     }
 
     const startedServiceIds = [];
     try {
       await this.ensureServiceStarted("qlcBridge", { startedServiceIds });
-      if (!this.serviceIsHealthy(qlcPlusWeb)) {
-        await this.refreshExternalService("qlcPlusWeb");
-      }
-      if (!this.serviceIsHealthy(qlcPlusWeb)) {
-        this.addLog("qlcBridge", "QLC+ Web Interface on 127.0.0.1:9999 is unavailable; keeping diagnostic dry-run bridge active for DMX Dashboard");
-      }
+      this.addLog("qlcBridge", "Diagnostic dry-run bridge active; QLC+ is not required for DMX Dashboard diagnostics");
       return this.getSystemStatus();
     } catch (error) {
       this.addLog("qlcBridge", `start failed: ${error.message}`);
@@ -821,16 +783,8 @@ class DesktopProcessManager {
     if (services.qlcBridge) {
       services.qlcBridge.statusDetails = [
         `QLC bridge 8791: ${qlcBridgeStatus.bridge8791}`,
-        `QLC+ Web Interface 9999: ${qlcBridgeStatus.qlcPlusWeb9999}`,
-        `Real physical QLC+ output: ${qlcBridgeStatus.physicalQlcOutput}`,
         `DMX Dashboard diagnostic mirror: ${qlcBridgeStatus.diagnosticMirror}`,
         "Mode: dry-run diagnostics",
-      ];
-    }
-    if (services.qlcPlusWeb) {
-      services.qlcPlusWeb.statusDetails = [
-        `QLC+ Web Interface 9999: ${qlcBridgeStatus.qlcPlusWeb9999}`,
-        `Real physical QLC+ output: ${qlcBridgeStatus.physicalQlcOutput}`,
       ];
     }
 
@@ -890,19 +844,14 @@ class DesktopProcessManager {
 
   buildQlcBridgeStatus(services) {
     const bridge = services.qlcBridge;
-    const qlcPlusWeb = services.qlcPlusWeb;
     const bridgeRunning = bridge?.healthy === true;
-    const qlcPlusWebAvailable = qlcPlusWeb?.healthy === true;
     return {
       bridge8791: bridgeRunning ? "running" : (bridge?.state || SERVICE_STATES.STOPPED),
-      qlcPlusWeb9999: qlcPlusWebAvailable ? "available" : "unavailable",
-      physicalQlcOutput: qlcPlusWebAvailable ? "available" : "unavailable",
+      physicalOutput: "not managed in diagnostic mode",
       diagnosticMirror: bridgeRunning ? "available" : "available via desktop IPC mirror when dashboard is open",
       diagnosticMode: true,
       dryRun: true,
-      message: qlcPlusWebAvailable
-        ? "QLC bridge 8791 is in dry-run diagnostic mode; QLC+ Web Interface 9999 is reachable."
-        : "QLC bridge 8791 uses dry-run diagnostics; QLC+ Web Interface 9999 and real physical QLC+ output are unavailable.",
+      message: "QLC bridge 8791 uses dry-run diagnostics; QLC+ is not required for DMX Dashboard diagnostics.",
     };
   }
 
@@ -1035,10 +984,9 @@ function terminateChild(child) {
   });
 }
 
-function knownProjectPorts(services, { includeExternalQlc = false } = {}) {
+function knownProjectPorts(services) {
   return Array.from(new Set(
     Array.from(services.values())
-      .filter((service) => includeExternalQlc || service.port !== 9999)
       .map((service) => service.port)
       .filter((port) => Number.isInteger(port) && port > 0),
   )).sort((a, b) => a - b);

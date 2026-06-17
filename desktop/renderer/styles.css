@@ -53,10 +53,30 @@ button:disabled {
 
 .hero {
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
   justify-content: space-between;
   gap: 28px;
   margin-bottom: 28px;
+}
+
+.hero-copy {
+  flex: 1 1 640px;
+}
+
+.hero-card {
+  flex: 0 0 320px;
+  border: 1px solid rgba(237, 242, 244, 0.12);
+  border-radius: 12px;
+  background:
+    linear-gradient(160deg, rgba(79, 195, 177, 0.12), rgba(255, 214, 102, 0.05)),
+    rgba(13, 17, 19, 0.9);
+  padding: 18px;
+}
+
+.hero-card strong,
+.hero-card span,
+.hero-card p {
+  display: block;
 }
 
 .eyebrow {
@@ -106,6 +126,32 @@ h2 {
   grid-template-columns: 1fr 1fr;
   gap: 18px;
   margin-bottom: 18px;
+}
+
+.launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.launcher-card {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  border: 1px solid rgba(237, 242, 244, 0.08);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.02)),
+    rgba(13, 17, 19, 0.82);
+}
+
+.launcher-card h2 {
+  margin-bottom: 0;
+}
+
+.launcher-actions {
+  justify-content: flex-start;
 }
 
 .panel {
@@ -283,6 +329,20 @@ h2 {
 
 .warning {
   color: #ffd889;
+}
+
+@media (max-width: 1024px) {
+  .hero {
+    flex-direction: column;
+  }
+
+  .hero-card {
+    flex-basis: auto;
+  }
+
+  .launcher-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .service-error span,

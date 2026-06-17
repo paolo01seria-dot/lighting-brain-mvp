@@ -109,6 +109,12 @@ const elements = {
   setupBlackoutButton: document.querySelector("#setupBlackoutButton"),
   setupFixtureChannelCount: document.querySelector("#setupFixtureChannelCount"),
   setupFixtureChannelSaveButton: document.querySelector("#setupFixtureChannelSaveButton"),
+  setupLibraryPanel: document.querySelector("#setupLibraryPanel"),
+  setupLibraryRefresh: document.querySelector("#setupLibraryRefresh"),
+  setupLibraryValidate: document.querySelector("#setupLibraryValidate"),
+  setupLibrarySetCurrent: document.querySelector("#setupLibrarySetCurrent"),
+  setupLibrarySummary: document.querySelector("#setupLibrarySummary"),
+  setupLibraryList: document.querySelector("#setupLibraryList"),
   genreProfile: document.querySelector("#genreProfile"),
   playButton: document.querySelector("#playButton"),
   stopButton: document.querySelector("#stopButton"),
@@ -249,6 +255,9 @@ let desktopQlcBridgeSelectionRequestId = 0;
 let qlcDesktopMirrorUnavailableLogged = false;
 let qlcDesktopMirrorAvailableLogged = false;
 let qlcDesktopBridgeUnavailableLogged = false;
+let setupLibraryStatus = null;
+let selectedSetupLibraryPath = null;
+let setupLibraryRefreshPromise = null;
 
 let lights = [];
 let lightStates = [];
@@ -286,6 +295,7 @@ const setupRoleColors = {
   speed: [174, 96, 255],
 };
 let setupLastChannelSendAt = 0;
+let setupLastOutputChannel = null;
 let setupLightState = {
   active: false,
   phase: "fixture_channels",
@@ -2120,8 +2130,10 @@ function qlcWebBridgeActive() {
   return elements.outputTarget?.value === "qlc_web_bridge";
 }
 
-function postQlcWeb(path, payload) {
-  mirrorQlcWebToDesktop(path, payload);
+function postQlcWeb(path, payload, { mirror = true, suppressFailureLog = false } = {}) {
+  if (mirror) {
+    mirrorQlcWebToDesktop(path, payload);
+  }
   return fetch(`${qlcBridgeUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2130,8 +2142,10 @@ function postQlcWeb(path, payload) {
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     return response;
   }).catch((error) => {
-    console.warn(`[qlc-web] failed ${path}`, error);
-    logEvent(`[qlc-web] failed ${path}: ${error.message}`);
+    if (!suppressFailureLog) {
+      console.warn(`[qlc-web] failed ${path}`, error);
+      logEvent(`[qlc-web] failed ${path}: ${error.message}`);
+    }
   });
 }
 
@@ -5703,6 +5717,7 @@ function enterSetupLightMode() {
   setupLightState.selectedFixtureIndex = null;
   setupLightState.selectedChannel = 1;
   setupLightState.selectedChannelValue = 255;
+  setupLastOutputChannel = null;
   if (elements.setupChannelValue) elements.setupChannelValue.value = "255";
   ensureSetupLightState();
   setState("Setup Light");
@@ -5718,6 +5733,7 @@ function enterSetupLightMode() {
 function leaveSetupLightMode() {
   if (!setupLightState.active) return;
   sendSetupSelectedChannel(0, true);
+  setupLastOutputChannel = null;
   setupLightState.active = false;
   document.body.classList.remove("setup-light-mode", "setup-light-phase-fixture-channels", "setup-light-phase-channel-mapping");
   clearSetupLightOverlays();
@@ -5729,6 +5745,9 @@ function renderSetupLightMode() {
   document.body.classList.toggle("setup-light-phase-channel-mapping", setupLightState.active && setupLightState.phase === "channel_mapping");
   if (!setupLightState.active) return;
   ensureSetupLightState();
+  if (!setupLibraryStatus && !setupLibraryRefreshPromise) {
+    refreshSetupLibraryPanel();
+  }
   renderLights();
   if (setupLightState.phase === "fixture_channels") {
     renderSetupFixtureChannels();
@@ -5738,6 +5757,107 @@ function renderSetupLightMode() {
     renderSetupChannelMapping();
     sendSetupSelectedChannel();
   }
+}
+
+function setupLibraryApi() {
+  return window.lightingBrainDesktop?.lightSetup ?? null;
+}
+
+function refreshSetupLibraryPanel() {
+  const api = setupLibraryApi();
+  if (!elements.setupLibraryPanel || !setupLightState.active) return;
+  if (!api) {
+    renderSetupLibraryUnavailable();
+    return;
+  }
+  if (setupLibraryRefreshPromise) return;
+  setupLibraryRefreshPromise = api.getStatus()
+    .then((status) => {
+      setupLibraryStatus = status;
+      selectedSetupLibraryPath = selectedSetupLibraryPath || status.current?.path || null;
+      renderSetupLibrary(status);
+    })
+    .catch((error) => {
+      logEvent(`[setup-light] setup library unavailable: ${error.message}`);
+      renderSetupLibraryUnavailable(error.message);
+    })
+    .finally(() => {
+      setupLibraryRefreshPromise = null;
+    });
+}
+
+function renderSetupLibraryUnavailable(error = "Desktop setup library is available only inside the Electron Light Setup window.") {
+  if (!elements.setupLibrarySummary || !elements.setupLibraryList) return;
+  elements.setupLibrarySummary.replaceChildren();
+  const message = document.createElement("p");
+  message.textContent = error;
+  elements.setupLibraryList.replaceChildren(message);
+  setSetupLibraryActionsDisabled(true);
+}
+
+function renderSetupLibrary(status) {
+  if (!elements.setupLibrarySummary || !elements.setupLibraryList) return;
+  const current = status.current || {};
+  const rows = [
+    ["Current/default setup", current.name || "-"],
+    ["Path", current.path || "built-in fallback preset"],
+    ["Fixtures", current.fixtureCount ?? 0],
+    ["Mapped DMX channels", current.mappedChannelCount ?? 0],
+  ];
+  elements.setupLibrarySummary.replaceChildren(...rows.map(([label, value]) => {
+    const row = document.createElement("article");
+    row.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span>`;
+    return row;
+  }));
+
+  const setups = status.setups || [];
+  if (!setups.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "No saved setup files found yet. Save a Setup Light JSON file to the setup folder.";
+    elements.setupLibraryList.replaceChildren(empty);
+    setSetupLibraryActionsDisabled(false);
+    return;
+  }
+  elements.setupLibraryList.replaceChildren(...setups.map((setup) => renderSetupLibraryItem(setup, current)));
+  setSetupLibraryActionsDisabled(false);
+}
+
+function renderSetupLibraryItem(setup, current) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.className = [
+    "setup-library-item",
+    setup.valid ? "" : "is-invalid",
+    setup.path === current.path ? "is-current" : "",
+    setup.path === selectedSetupLibraryPath ? "is-selected" : "",
+  ].filter(Boolean).join(" ");
+  item.innerHTML = `
+    <strong>${escapeHtml(setup.name)}</strong>
+    <small>${escapeHtml(setup.path || "")}</small>
+    <span>${escapeHtml(setup.fixtureCount)} fixtures · ${escapeHtml(setup.mappedChannelCount)} channels · ${setup.valid ? "valid" : `invalid: ${escapeHtml(setup.error || "unknown")}`}</span>
+    <small>${escapeHtml(setup.lastModified || "-")}</small>
+  `;
+  item.addEventListener("click", () => {
+    selectedSetupLibraryPath = setup.path;
+    renderSetupLibrary(setupLibraryStatus);
+  });
+  return item;
+}
+
+function setSetupLibraryActionsDisabled(disabled) {
+  if (elements.setupLibraryRefresh) elements.setupLibraryRefresh.disabled = disabled;
+  if (elements.setupLibraryValidate) elements.setupLibraryValidate.disabled = disabled || !selectedSetupLibraryPath;
+  if (elements.setupLibrarySetCurrent) elements.setupLibrarySetCurrent.disabled = disabled || !selectedSetupLibraryPath;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#039;",
+  }[char]));
 }
 
 function preserveSetupScroll(callback) {
@@ -5984,14 +6104,23 @@ function selectSetupChannel(channel) {
 
 function sendSetupSelectedChannel(value = setupLightState.selectedChannelValue, force = false) {
   if (!setupLightState.active || setupLightState.phase !== "channel_mapping") return;
-  if (!qlcWebBridgeActive()) return;
   const now = performance.now();
   if (!force && now - setupLastChannelSendAt < 45) return;
   setupLastChannelSendAt = now;
   const address = clamp(Number(setupLightState.selectedChannel), 1, 512);
   const safeValue = clamp(Number(value), 0, 255);
-  console.log(`[setup-light] POST /channel address=${address} value=${safeValue}`);
-  postQlcWeb("/channel", { address, value: safeValue });
+  const suppressBridgeFailureLog = !qlcWebBridgeActive();
+  console.log(`[setup-light] diagnostic channel address=${address} value=${safeValue}`);
+  if (setupLastOutputChannel !== null && (setupLastOutputChannel !== address || safeValue <= 0 || force)) {
+    postQlcWeb("/channel", { address: setupLastOutputChannel, value: 0 }, { suppressFailureLog: suppressBridgeFailureLog });
+  }
+  if (safeValue > 0) {
+    postQlcWeb("/channel", { address, value: safeValue }, { suppressFailureLog: suppressBridgeFailureLog });
+    setupLastOutputChannel = address;
+  } else if (setupLastOutputChannel === address || force) {
+    postQlcWeb("/channel", { address, value: 0 }, { suppressFailureLog: suppressBridgeFailureLog });
+    setupLastOutputChannel = null;
+  }
 }
 
 function setSetupChannelValue(value, { send = true, force = false } = {}) {
@@ -6582,7 +6711,70 @@ elements.stopButton.addEventListener("click", () => {
 });
 
 elements.inputSource.addEventListener("change", () => {
+  if (setupLightState.active) {
+    elements.inputSource.value = "setup_light";
+    return;
+  }
   setInputMode(elements.inputSource.value);
+});
+
+elements.setupLibraryRefresh?.addEventListener("click", () => {
+  const api = setupLibraryApi();
+  if (!api) {
+    renderSetupLibraryUnavailable();
+    return;
+  }
+  setSetupLibraryActionsDisabled(true);
+  api.refresh()
+    .then((status) => {
+      setupLibraryStatus = status;
+      selectedSetupLibraryPath = status.current?.path || selectedSetupLibraryPath;
+      renderSetupLibrary(status);
+      logEvent("[setup-light] library refreshed");
+    })
+    .catch((error) => {
+      logEvent(`[setup-light] refresh failed: ${error.message}`);
+      renderSetupLibraryUnavailable(error.message);
+    });
+});
+
+elements.setupLibraryValidate?.addEventListener("click", () => {
+  const api = setupLibraryApi();
+  if (!api || !selectedSetupLibraryPath) return;
+  setSetupLibraryActionsDisabled(true);
+  api.validate(selectedSetupLibraryPath)
+    .then((result) => {
+      logEvent(`[setup-light] validation ${result.valid ? "valid" : `invalid: ${result.error}`}`);
+    })
+    .catch((error) => {
+      logEvent(`[setup-light] validation failed: ${error.message}`);
+    })
+    .finally(() => setSetupLibraryActionsDisabled(false));
+});
+
+elements.setupLibrarySetCurrent?.addEventListener("click", () => {
+  const api = setupLibraryApi();
+  if (!api || !selectedSetupLibraryPath) return;
+  setSetupLibraryActionsDisabled(true);
+  api.setCurrent(selectedSetupLibraryPath)
+    .then((result) => {
+      if (!result.ok) {
+        logEvent(`[setup-light] set current failed: ${result.error || "unknown error"}`);
+        return api.getStatus();
+      }
+      logEvent(`[setup-light] current setup selected: ${selectedSetupLibraryPath}`);
+      return result.status || api.getStatus();
+    })
+    .then((status) => {
+      if (!status) return;
+      setupLibraryStatus = status;
+      selectedSetupLibraryPath = status.current?.path || selectedSetupLibraryPath;
+      renderSetupLibrary(status);
+    })
+    .catch((error) => {
+      logEvent(`[setup-light] set current failed: ${error.message}`);
+    })
+    .finally(() => setSetupLibraryActionsDisabled(false));
 });
 
 elements.audioDevice.addEventListener("change", () => {
